@@ -1,3 +1,9 @@
+## v0.2.0 (2026-10-14)
+
+### Feat
+
+- **cli**: mostra se o binário está instalado e como ficam os secrets do GitHub
+
 ## v0.1.0 (2026-10-13)
 
 Primeira versão da variante genérica para GitHub.
