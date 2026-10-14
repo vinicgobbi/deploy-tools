@@ -124,3 +124,25 @@ jobs:
           fi
           gh release upload "$TAG" dist/* --clobber
           echo "release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG"
+
+  # Os binários vão do disco do runner direto para a release; artefato de
+  # Action só ocuparia armazenamento. Roda no fim de todo run (com ou sem
+  # release nova, e mesmo se algo falhar) e apaga qualquer artefato dele.
+  cleanup:
+    needs: [test, bump, publish]
+    if: ${{ always() && !startsWith(github.event.head_commit.message, 'bump:') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Excluir artefatos do run
+        run: |
+          ids=$(gh api --paginate "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq '.artifacts[].id')
+          n=0
+          for id in $ids; do
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id"
+            n=$((n + 1))
+          done
+          echo "$n artefato(s) excluído(s)."

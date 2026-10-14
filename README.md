@@ -511,6 +511,9 @@ seguinte:
    `refactor:` não geram release.
 3. Builda os binários da tag e publica a release no GitHub, com a seção do
    CHANGELOG como notas e os arquivos anexados (cada um com seu `.sha256`).
+   Os binários vão do runner direto para a release, e no fim o job exclui
+   qualquer artefato do run, então nada fica ocupando armazenamento de
+   Actions.
 4. Autocorreção: se não houver nada para versionar, mas a última tag ainda
    não tiver release (por exemplo, porque um run anterior falhou depois do
    bump), essa tag é publicada no próximo push.
