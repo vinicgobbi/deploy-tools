@@ -39,6 +39,11 @@ type Paths struct {
 	SitesEnabled string // /etc/apache2/sites-enabled
 	BinDir       string // /usr/local/bin
 	DeployHome   string // /home/deploy
+	SSHDir       string // /etc/ssh (host keys for DEPLOY_HOST_KEY)
+
+	// DeployHost is how the CI reaches this server (secret DEPLOY_HOST);
+	// "" = the machine's hostname.
+	DeployHost string
 
 	DeployUser string
 	WebGroup   string
@@ -62,6 +67,7 @@ func Default() Paths {
 		SitesEnabled: "/etc/apache2/sites-enabled",
 		BinDir:       "/usr/local/bin",
 		DeployHome:   "/home/deploy",
+		SSHDir:       "/etc/ssh",
 		DeployUser:   "deploy",
 		WebGroup:     "www-data",
 		CertDirs:     append([]string(nil), tlscert.DefaultDirs...),
@@ -99,6 +105,8 @@ func Load(path string) (Paths, error) {
 				val = "." + val
 			}
 			p.DomainSuffix = val
+		case "DEPLOY_HOST":
+			p.DeployHost = val
 		case "SSL_CERT_FILE":
 			p.CertFile = val
 		case "SSL_CERT_KEY":
@@ -125,6 +133,7 @@ func ForRoot(root string) Paths {
 	p.SitesEnabled = filepath.Join(root, p.SitesEnabled)
 	p.BinDir = filepath.Join(root, p.BinDir)
 	p.DeployHome = filepath.Join(root, p.DeployHome)
+	p.SSHDir = filepath.Join(root, p.SSHDir)
 	p.CertDirs = nil
 	for _, d := range tlscert.DefaultDirs {
 		p.CertDirs = append(p.CertDirs, filepath.Join(root, d))

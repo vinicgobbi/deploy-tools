@@ -57,6 +57,9 @@ func tuiApp(env *Env) tui.App {
 		Title: "deploy-tools " + env.Version,
 		Subtitle: func() string {
 			host, _ := os.Hostname()
+			if _, loose := installSummary(env); loose {
+				return host + " · binário solto (" + env.installState().Self + ")"
+			}
 			return host
 		},
 		IsRoot: isRoot,
@@ -162,10 +165,23 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools key add <arquivo.pub>",
 				},
 				{
+					Label: "Secrets do GitHub", Run: func() error {
+						printSecrets(env, env.P.Secrets(""), "", secretsTarget{})
+						return nil
+					},
+					Desc: text("Mostra de novo como devem ficar os secrets dos repositórios no GitHub " +
+						"(DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_HOST_KEY), com os valores deste servidor " +
+						"e os comandos gh equivalentes.\n\n⚠ " + secretsWarning),
+					CLI: "deploy-tools key secrets [--host h] [--repo dono/repo | --org org]",
+				},
+				{
 					Label: "Instalar/atualizar", Root: true, Run: rooted(func() error { return iInstall(env) }),
-					Desc: text("Instala este binário (" + env.Version + ") em " + env.Paths.BinDir + " e troca o " +
-						"deploy-ci de forma atômica. Não mexe em usuário, chaves nem apps: os próximos " +
-						"deploys da CI já usam a versão nova."),
+					Desc: func() string {
+						lines, _ := installSummary(env)
+						return "Instala este binário (" + env.Version + ") em " + env.Paths.BinDir + " e troca o " +
+							"deploy-ci de forma atômica. Não mexe em usuário, chaves nem apps: os próximos " +
+							"deploys da CI já usam a versão nova.\n\n" + strings.Join(lines, "\n")
+					},
 					CLI: "sudo deploy-tools server install",
 				},
 				{
@@ -488,13 +504,19 @@ func iAddKey(env *Env) error {
 	if err := env.UI.Input("Caminho da chave PÚBLICA (.pub)", "ci_deploy_key.pub", &path, fileExists); err != nil {
 		return err
 	}
-	return env.P.AddKey(path)
+	if err := env.P.AddKey(path); err != nil {
+		return err
+	}
+	env.UI.Println()
+	printSecrets(env, env.P.Secrets(""), privateKeyName(path), secretsTarget{})
+	return nil
 }
 
 func iInstall(env *Env) error {
 	if err := env.P.Install(env.Self); err != nil {
 		return err
 	}
+	env.install = nil
 	env.UI.OK("Instalado. Os próximos deploys da CI já usam a versão nova.")
 	return nil
 }
@@ -512,7 +534,12 @@ func iSetup(env *Env) error {
 	if err := env.P.Setup(env.Self, path); err != nil {
 		return err
 	}
+	env.install = nil
 	env.UI.OK("Servidor pronto.")
+	if path != "" {
+		env.UI.Println()
+		printSecrets(env, env.P.Secrets(""), privateKeyName(path), secretsTarget{})
+	}
 	return nil
 }
 

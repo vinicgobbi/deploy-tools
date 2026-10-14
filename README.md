@@ -61,9 +61,16 @@ O `server setup` é idempotente e faz o seguinte:
 - Autoriza a chave pública com `command="/usr/local/bin/deploy-ci"` e
   `no-pty`.
 
-Depois, guarde a chave **privada** como secret no GitHub (veja
-[Secrets](#secrets-no-github)) e, se quiser, configure
+Ao final, o `server setup --key` (e também o `key add`) mostra como devem
+ficar os secrets do GitHub para este servidor (veja
+[Secrets](#secrets-no-github)). Se quiser, configure também
 [`/etc/deploy-tools.conf`](#configuração-do-servidor-etcdeploy-toolsconf).
+
+O `deploy-tools` identifica se está rodando a cópia instalada ou um binário
+solto (por exemplo, a release recém-baixada em `/tmp`). O `deploy-tools
+version` e o `deploy-tools server status` mostram isso, junto com a versão
+instalada e se o binário solto é mais novo ou mais antigo. A interface de
+tela cheia indica "binário solto" no cabeçalho.
 
 Para atualizar um servidor já configurado, só troque o binário:
 
@@ -83,6 +90,9 @@ Opcional. É um arquivo `CHAVE=valor`, do root, lido só pela CLI de operação
 nunca executado como script.
 
 ```
+# Endereço pelo qual o runner do GitHub alcança o servidor (secret DEPLOY_HOST)
+DEPLOY_HOST=deploy.example.com
+
 # Domínio padrão: "app create api" sem --domain vira api.example.com
 DOMAIN_SUFFIX=example.com
 
@@ -198,9 +208,11 @@ deploy-tools release list <app>
 deploy-tools release rollback <app> [release]   # sem release: volta para a anterior
 deploy-tools key add <arquivo.pub>
 deploy-tools key list
+deploy-tools key secrets [--host h] [--repo dono/repo | --org org]
 deploy-tools server install
 deploy-tools server setup [--key arquivo.pub]
 deploy-tools server certs
+deploy-tools server status                      # instalado ou rodando solto?
 deploy-tools completion bash|zsh|fish
 ```
 
@@ -342,7 +354,25 @@ organização (para compartilhar entre vários apps no mesmo servidor):
 | `DEPLOY_HOST` | IP ou hostname do servidor |
 | `DEPLOY_USER` | `deploy` |
 | `DEPLOY_SSH_KEY` | Conteúdo da chave **privada** (`ci_deploy_key`) |
-| `DEPLOY_HOST_KEY` | Saída de `ssh-keyscan -H <host>` (fixa o host key e evita MITM sem precisar de `StrictHostKeyChecking=no`) |
+| `DEPLOY_HOST_KEY` | Linhas `known_hosts` do servidor (fixa o host key e evita MITM sem precisar de `StrictHostKeyChecking=no`) |
+
+Para ver esses valores a qualquer hora, rode no servidor:
+
+```bash
+deploy-tools key secrets                         # ou o item "Secrets do GitHub" na interface
+deploy-tools key secrets --repo acme/site        # já com os comandos gh secret set do repositório
+deploy-tools key secrets --org acme              # secrets da organização, para vários repositórios
+```
+
+O comando lê `DEPLOY_HOST_KEY` das host keys do próprio servidor
+(`/etc/ssh/ssh_host_*_key.pub`), mostra as chaves da CI autorizadas (para
+conferir com `ssh-keygen -lf ci_deploy_key` na sua máquina) e os comandos
+`gh secret set` equivalentes. Com eles, a chave privada vai do arquivo direto
+para o GitHub, sem passar pela tela. A chave privada nunca fica no servidor,
+então o comando não tem como mostrá-la.
+
+> **Não compartilhe essa saída** (chat, ticket, e-mail, print de tela). Junto
+> com a chave privada, ela permite publicar em todos os apps do servidor.
 
 O versionamento com Commitizen e a criação da release no GitHub usam o
 `GITHUB_TOKEN` do próprio workflow: não há token extra para configurar. Se a

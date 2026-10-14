@@ -22,6 +22,7 @@ type Env struct {
 	UI      *ui.UI
 	Self    string // path of the running binary (for server install)
 	Version string
+	install *provision.InstallState // cached by installState()
 	// RequireRoot fails unless running as root; replaced in tests.
 	RequireRoot func() error
 }
@@ -75,7 +76,11 @@ Sem argumentos, num terminal, abre um menu interativo.`,
 		Use:     "version",
 		Short:   "Mostra a versão",
 		Args:    cobra.NoArgs,
-		Run:     func(*cobra.Command, []string) { env.UI.Println("deploy-tools", env.Version) },
+		Run: func(*cobra.Command, []string) {
+			// The first line is parsed by InstallState of other copies.
+			env.UI.Println("deploy-tools", env.Version)
+			printInstallSummary(env)
+		},
 	})
 	root.AddCommand(&cobra.Command{
 		Use:    "ci",

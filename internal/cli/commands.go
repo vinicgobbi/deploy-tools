@@ -322,7 +322,12 @@ Gere o par na sua máquina (não no servidor):
 			if err := env.RequireRoot(); err != nil {
 				return err
 			}
-			return env.P.AddKey(args[0])
+			if err := env.P.AddKey(args[0]); err != nil {
+				return err
+			}
+			env.UI.Println()
+			printSecrets(env, env.P.Secrets(""), privateKeyName(args[0]), secretsTarget{})
+			return nil
 		},
 	})
 	key.AddCommand(&cobra.Command{
@@ -332,6 +337,7 @@ Gere o par na sua máquina (não no servidor):
 		Args:    cobra.NoArgs,
 		RunE:    func(*cobra.Command, []string) error { return doKeys(env) },
 	})
+	key.AddCommand(secretsCmd(env))
 	return key
 }
 
@@ -355,6 +361,7 @@ Se deploy-ci já existia e não era um symlink, ele fica em
 			if err := env.P.Install(env.Self); err != nil {
 				return err
 			}
+			env.install = nil
 			env.UI.OK("Instalado. Os próximos deploys da CI já usam a versão nova.")
 			return nil
 		},
@@ -380,15 +387,17 @@ com --key, autoriza a chave da CI. Idempotente: pode rodar de novo.`,
 				steps = append(steps, "Autorize a chave da CI: sudo deploy-tools key add ci_deploy_key.pub")
 			}
 			steps = append(steps,
-				"Guarde a chave PRIVADA no GitHub como secret DEPLOY_SSH_KEY (na organização, se for compartilhada).",
+				"Configure os secrets no GitHub (veja abaixo; de novo a qualquer hora: deploy-tools key secrets).",
 				"Se quiser domínio padrão ou o certificado real, configure "+config.File+" (DOMAIN_SUFFIX, SSL_CERT_*).",
 				"Crie os apps: sudo deploy-tools app create <app> --type laravel|react|static",
 			)
 			env.UI.Steps("Próximos passos", steps...)
+			env.UI.Println()
+			printSecrets(env, env.P.Secrets(""), privateKeyName(key), secretsTarget{})
 			return nil
 		},
 	}
 	setup.Flags().StringVar(&key, "key", "", "chave pública da CI a autorizar")
-	srv.AddCommand(setup, certsCmd(env))
+	srv.AddCommand(setup, certsCmd(env), statusCmd(env))
 	return srv
 }

@@ -157,13 +157,13 @@ func TestConfigDetectsType(t *testing.T) {
 // In accessible mode the TUI is a numbered menu with the same items:
 // 1 Criar app, 2 Migrar, 3 Status, 4 Listar, 5 Rollback, 6 Configurar,
 // 7 Ativar site, 8 Desativar site, 9 Chaves, 10 Adicionar chave,
-// 13 Instalar, 14 Setup, 15 Certificados, 16 Sair.
+// 13 Secrets, 14 Instalar, 15 Setup, 16 Certificados, 17 Sair.
 
 func TestInteractiveCreate(t *testing.T) {
 	// 1 = Criar app. Then name, type (1 = Laravel), domain (empty keeps
 	// the default), migrations y, enable n, confirm y. The menu comes back
-	// below the result: 16 = Sair.
-	answers := strings.Join([]string{"1", "minha-api", "1", "", "y", "n", "y", "16"}, "\n") + "\n"
+	// below the result: 17 = Sair.
+	answers := strings.Join([]string{"1", "minha-api", "1", "", "y", "n", "y", "17"}, "\n") + "\n"
 	env, out := testEnv(t, answers)
 	env.UI.ClearScreen = true
 	if err := runCLI(env); err != nil {
@@ -192,7 +192,7 @@ func TestInteractiveCreate(t *testing.T) {
 }
 
 func TestInteractiveWithoutRootFailsBeforeAsking(t *testing.T) {
-	env, out := testEnv(t, "1\n16\n")
+	env, out := testEnv(t, "1\n17\n")
 	env.RequireRoot = func() error { return errors.New("precisa de root — rode com sudo") }
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -205,8 +205,8 @@ func TestInteractiveWithoutRootFailsBeforeAsking(t *testing.T) {
 
 func TestInteractiveRollback(t *testing.T) {
 	// 5 = Rollback; app 1 (docs); release 1 (= "2", newest non-current);
-	// confirm y; 16 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"5", "1", "1", "y", "16"}, "\n")+"\n")
+	// confirm y; 17 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"5", "1", "1", "y", "17"}, "\n")+"\n")
 	_ = os.MkdirAll(env.Paths.AppDir("docs"), 0o755)
 	deployN(t, env, "docs", "1", "2", "3")
 	if err := runCLI(env); err != nil {
@@ -243,8 +243,8 @@ func TestStatusCard(t *testing.T) {
 func TestInteractiveMigrate(t *testing.T) {
 	// 2 = Migrar; app 1 (docs, the only unmanaged one: "api" is already
 	// migrated and must not be offered); type 3 (Estático); confirm y;
-	// 16 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"2", "1", "3", "y", "16"}, "\n")+"\n")
+	// 17 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"2", "1", "3", "y", "17"}, "\n")+"\n")
 	_ = os.MkdirAll(env.Paths.AppDir("api"), 0o755)
 	deployN(t, env, "api", "1")
 	root := env.Paths.AppDir("docs")
@@ -287,8 +287,8 @@ func selectOptions(out, title string) []string {
 
 func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
 	// 6 = Configurar; app 1 (semconf, the only one offered); type 3
-	// (Estático); 16 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"6", "1", "3", "16"}, "\n")+"\n")
+	// (Estático); 17 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"6", "1", "3", "17"}, "\n")+"\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	if err := runCLI(env, "app", "create", "comconf", "--type", "react"); err != nil {
@@ -311,7 +311,7 @@ func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
 }
 
 func TestInteractiveConfigNothingToDo(t *testing.T) {
-	env, out := testEnv(t, "6\n16\n")
+	env, out := testEnv(t, "6\n17\n")
 	_ = os.MkdirAll(env.Paths.AppDir("legado"), 0o755)
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -323,8 +323,8 @@ func TestInteractiveConfigNothingToDo(t *testing.T) {
 
 func TestInteractiveDisable(t *testing.T) {
 	// 8 = Desativar site; app 1 (front, the only active site); confirm y;
-	// 16 = Sair.
-	env, out := testEnv(t, "8\n1\ny\n16\n")
+	// 17 = Sair.
+	env, out := testEnv(t, "8\n1\ny\n17\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	for _, app := range []string{"front", "parado"} {
@@ -378,5 +378,94 @@ func TestDomainCommands(t *testing.T) {
 	}
 	if err := runCLI(env, "app", "cert", "loja", "--cert", "/x.crt"); err == nil {
 		t.Fatal("--cert without --key must fail")
+	}
+}
+
+func TestCompareVersions(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		cmp  int
+		ok   bool
+	}{
+		{"v0.2.0", "v0.1.9", 1, true},
+		{"v1.0.0", "v1.0.0-3-gabc1234", 0, true},
+		{"v1.2.3", "v1.10.0", -1, true},
+		{"dev", "v1.0.0", 0, false},
+	} {
+		if cmp, ok := compareVersions(c.a, c.b); cmp != c.cmp || ok != c.ok {
+			t.Errorf("compareVersions(%q, %q) = %d, %v", c.a, c.b, cmp, ok)
+		}
+	}
+}
+
+func TestVersionShowsInstallState(t *testing.T) {
+	env, out := testEnv(t, "")
+	env.Version = "v0.2.0"
+	env.Self = filepath.Join(t.TempDir(), "deploy-tools-linux-amd64")
+	_ = os.WriteFile(env.Self, []byte("bin"), 0o755)
+
+	if err := runCLI(env, "version"); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.HasPrefix(got, "deploy-tools v0.2.0\n") || !strings.Contains(got, "rodando solto de "+env.Self) ||
+		!strings.Contains(got, "ainda não está instalado") {
+		t.Fatalf("not installed:\n%s", got)
+	}
+
+	if err := env.P.Install(env.Self); err != nil {
+		t.Fatal(err)
+	}
+	env.install = nil
+	env.P.Runner.(*run.Fake).Output[env.Paths.BinaryPath()+" version"] = "deploy-tools v0.1.0\n"
+	out.Reset()
+	if err := runCLI(env, "server", "status"); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "Instalado: v0.1.0") || !strings.Contains(got, "Este é mais novo") {
+		t.Fatalf("older installed:\n%s", got)
+	}
+
+	env.Self, env.install = env.Paths.BinaryPath(), nil
+	out.Reset()
+	_ = runCLI(env, "version")
+	if got := out.String(); strings.Contains(got, "solto") || !strings.Contains(got, "Instalado em "+env.Paths.BinaryPath()+" (v0.2.0)") {
+		t.Fatalf("running installed:\n%s", got)
+	}
+}
+
+func TestKeyAddShowsSecrets(t *testing.T) {
+	env, out := testEnv(t, "")
+	env.Paths.DeployHost = "deploy.example.com"
+	env.P.Paths = env.Paths
+	_ = os.MkdirAll(env.Paths.SSHDir, 0o755)
+	_ = os.WriteFile(filepath.Join(env.Paths.SSHDir, "ssh_host_ed25519_key.pub"), []byte("ssh-ed25519 AAAAhost root@srv\n"), 0o644)
+	pub := filepath.Join(t.TempDir(), "minha_chave.pub")
+	_ = os.WriteFile(pub, []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ci-deploy\n"), 0o644)
+
+	if err := runCLI(env, "key", "add", pub); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"Secrets do GitHub", "Não compartilhe",
+		"DEPLOY_HOST", "deploy.example.com", "DEPLOY_USER", "deploy",
+		"arquivo minha_chave (a chave PRIVADA",
+		"deploy.example.com ssh-ed25519 AAAAhost",
+		"ci-deploy",
+		"gh secret set DEPLOY_SSH_KEY -R <dono>/<repo> < minha_chave",
+		"| gh secret set DEPLOY_HOST_KEY -R <dono>/<repo>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("faltou %q:\n%s", want, got)
+		}
+	}
+
+	out.Reset()
+	if err := runCLI(env, "key", "secrets", "--org", "acme", "--host", "1.2.3.4"); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "gh secret set DEPLOY_HOST --org acme --visibility all --body '1.2.3.4'") ||
+		!strings.Contains(got, "'1.2.3.4 ssh-ed25519 AAAAhost'") {
+		t.Fatalf("key secrets:\n%s", got)
 	}
 }
