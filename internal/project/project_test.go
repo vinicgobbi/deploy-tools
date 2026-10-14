@@ -1,0 +1,248 @@
+package project
+
+import (
+	"flag"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+var update = flag.Bool("update", false, "rewrite golden files")
+
+const testRef = "66ac5741e772bfd2c2afb58b1d36527da520f3f6"
+
+func write(t *testing.T, dir, name, body string) {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fixtures mirror typical projects of each kind.
+func fixture(t *testing.T, kind string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), map[string]string{
+		"laravel": "api", "react": "front", "mkdocs": "company-docs", "plain": "site",
+	}[kind])
+	switch kind {
+	case "laravel":
+		write(t, dir, "artisan", "#!/usr/bin/env php")
+		write(t, dir, "composer.json", `{"require":{"php":"^8.4.1"},"require-dev":{"laravel/pint":"^1"}}`)
+		write(t, dir, "cz.toml", "[tool.commitizen]\n")
+		for _, d := range []string{"app", "config", "routes", "tests"} {
+			write(t, dir, d+"/x.php", "<?php")
+		}
+	case "react":
+		write(t, dir, "package.json", `{"scripts":{"build":"tsc -b && vite build","lint":"eslint ."},"dependencies":{"react":"^19"}}`)
+		write(t, dir, "pnpm-lock.yaml", "")
+		write(t, dir, "vite.config.ts", "")
+		write(t, dir, "cz.toml", "")
+		write(t, dir, ".npmrc", "@acme:registry=https://npm.pkg.github.com\n")
+		write(t, dir, ".env.example", "# c\nVITE_API_URL_API=x\nVITE_API_URL_GQL=y\nOTHER=1\n")
+	case "mkdocs":
+		write(t, dir, "mkdocs.yml", "site_name: x")
+		write(t, dir, "requirements.txt", "mkdocs")
+	case "plain":
+		write(t, dir, "index.html", "hi")
+	}
+	return dir
+}
+
+func TestDetect(t *testing.T) {
+	l := Detect(fixture(t, "laravel"))
+	if l.Type != Laravel || l.App != "api" || l.PHPVersion != "8.4" || !l.Pint || !l.Commitizen ||
+		strings.Join(l.PHPDirs, ",") != "app,config,routes,tests" {
+		t.Errorf("laravel: %+v", l)
+	}
+	r := Detect(fixture(t, "react"))
+	if r.Type != React || r.App != "front" || r.PackageManager != "pnpm" || !r.Lint || !r.PrivateRegistry ||
+		strings.Join(r.ViteVars, ",") != "VITE_API_URL_API,VITE_API_URL_GQL" || r.OutputDir != "dist" {
+		t.Errorf("react: %+v", r)
+	}
+	m := Detect(fixture(t, "mkdocs"))
+	if m.Type != Static || !m.MkDocs || !m.Requirements || m.OutputDir != "site" || m.Commitizen {
+		t.Errorf("mkdocs: %+v", m)
+	}
+	p := Detect(fixture(t, "plain"))
+	if p.Type != Static || p.MkDocs || p.OutputDir != "." {
+		t.Errorf("plain: %+v", p)
+	}
+}
+
+func golden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	if *update {
+		_ = os.MkdirAll("testdata", 0o755)
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != string(want) {
+		t.Errorf("%s mismatch (rode com -update):\n%s", name, got)
+	}
+}
+
+func TestRenderGoldenAndClean(t *testing.T) {
+	for _, kind := range []string{"laravel", "react", "mkdocs", "plain"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := fixture(t, kind)
+			o := Detect(dir)
+			o.ActionRef, o.ActionVersion = testRef, "v1.2.0"
+			got, err := Render(o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			golden(t, "deploy-"+kind+".yml", got)
+
+			var doc map[string]any
+			if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+				t.Fatalf("YAML inválido: %v\n%s", err, got)
+			}
+			// What init generates must pass check without warnings/errors
+			// (info about the action version is fine).
+			write(t, dir, ".github/workflows/deploy.yml", got)
+			fs, err := Check(dir, testRef, "v1.2.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range fs {
+				if f.Level > Info {
+					t.Errorf("finding no gerado: %s", f)
+				}
+			}
+		})
+	}
+}
+
+// The generated laravel package step must be valid shell (excludes quoted).
+func TestLaravelPackageStepIsValidShell(t *testing.T) {
+	o := Detect(fixture(t, "laravel"))
+	o.ActionRef, o.ActionVersion = testRef, "v1.2.0"
+	got, _ := Render(o)
+	var doc struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range doc.Jobs["release-and-deploy"].Steps {
+		if s.Run == "" {
+			continue
+		}
+		if out, err := exec.Command("bash", "-n", "-c", s.Run).CombinedOutput(); err != nil {
+			t.Errorf("step %q: bash -n: %v %s", s.Name, err, out)
+		}
+	}
+}
+
+func TestCheckFindsProblemsInLegacyWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	// A hand-written workflow ported from Gitea.
+	write(t, dir, ".github/workflows/deploy.yml", `name: Build and deploy docs
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: https://gitea.com/actions/gitea-release-action@5a83c90484ef4355121df5eb60558c8ce66e81ac # v1.3.7
+      - name: Deploy over SSH
+        run: |
+          RELEASE_ID="${GITHUB_SHA::7}"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+              "deploy $APP_NAME $RELEASE_ID" < site.tar.gz
+      - uses: commitizen-tools/commitizen-action@338bbd841b75aaee6bf5340e1fa12f6ab58ff9ff # 0.27.1
+`)
+	fs, err := Check(dir, testRef, "v1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range fs {
+		got = append(got, f.String())
+	}
+	all := strings.Join(got, "\n")
+	for _, want := range []string{
+		`:9: erro: actions/checkout usa referência mutável "v4"`,
+		`:10: aviso: actions/setup-python fixado por SHA sem comentário`,
+		`:11: erro: https://gitea.com/actions/gitea-release-action@5a83c90484ef4355121df5eb60558c8ce66e81ac: o GitHub Actions não aceita URL`,
+		`:14: erro: RELEASE_ID precisa começar`,
+		`:16: aviso: passo de deploy por SSH copiado`,
+		`:1: aviso: workflow faz bump com commitizen mas não ignora`,
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("faltou %q em:\n%s", want, all)
+		}
+	}
+	if len(fs) != 6 {
+		t.Errorf("%d findings, want 6:\n%s", len(fs), all)
+	}
+}
+
+func TestCheckOutdatedAction(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, ".github/workflows/deploy.yml", `jobs:
+  x:
+    steps:
+      - uses: vinicgobbi/deploy-tools@1111111111111111111111111111111111111111 # v1.0.0
+        if: ${{ github.ref == 'refs/heads/main' }}
+`)
+	fs, _ := Check(dir, testRef, "v1.2.0")
+	if len(fs) != 1 || fs[0].Level != Info || !strings.Contains(fs[0].Msg, "v1.0.0") || !strings.Contains(fs[0].Msg, "v1.2.0") {
+		t.Fatalf("findings = %v", fs)
+	}
+}
+
+func TestDetectKeepsExistingAppName(t *testing.T) {
+	dir := fixture(t, "mkdocs")
+	write(t, dir, ".github/workflows/deploy.yml", "env:\n  APP_NAME: docs\n")
+	if got := Detect(dir).App; got != "docs" {
+		t.Fatalf("App = %q, want docs", got)
+	}
+}
+
+func TestCheckFlagsGiteaLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, ".github/workflows/deploy.yml", `jobs:
+  x:
+    if: "!startsWith(gitea.event.head_commit.message, 'bump:')"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: vinicgobbi/deploy-tools
+          path: .deploy-tools
+      - uses: ./.deploy-tools
+`)
+	fs, _ := Check(dir, testRef, "v1.2.0")
+	var got []string
+	for _, f := range fs {
+		got = append(got, f.String())
+	}
+	all := strings.Join(got, "\n")
+	for _, want := range []string{":3: erro: contexto gitea.*", ":1: aviso: o deploy-tools é público"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("faltou %q em:\n%s", want, all)
+		}
+	}
+}

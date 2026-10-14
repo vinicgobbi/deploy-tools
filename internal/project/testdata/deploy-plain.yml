@@ -1,0 +1,36 @@
+# Gerado por deploy-dev v1.2.0 (deploy-dev init). Pode editar à
+# vontade; rode "deploy-dev check" para validar contra as convenções.
+name: Release and deploy
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  APP_NAME: site
+
+jobs:
+  release-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Package release
+        run: tar -czf "$RUNNER_TEMP/release.tar.gz" -C . --exclude=./.git --exclude=./.github .
+
+      # Gera o release id (timestamp + sufixo), monta a chave num diretório
+      # temporário e envia o tarball ao deploy-ci do servidor.
+      - name: Deploy
+        uses: vinicgobbi/deploy-tools@66ac5741e772bfd2c2afb58b1d36527da520f3f6 # v1.2.0
+        with:
+          app: ${{ env.APP_NAME }}
+          archive: ${{ runner.temp }}/release.tar.gz
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host-key: ${{ secrets.DEPLOY_HOST_KEY }}

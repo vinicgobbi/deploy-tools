@@ -1,0 +1,85 @@
+# Action composta que publica um tarball no servidor via deploy-ci (o forced
+# command da chave da CI). Fica neste repositório para versionar junto com o
+# lado do servidor: uma mudança de protocolo muda os dois ao mesmo tempo.
+#
+# Uso (fixe no SHA da tag, com a versão comentada; `deploy-dev init` gera
+# este trecho):
+#
+#   - uses: vinicgobbi/deploy-tools@<sha-da-tag> # vX.Y.Z
+#     with:
+#       app: docs
+#       archive: site.tar.gz
+#       host: ${{ secrets.DEPLOY_HOST }}
+#       user: ${{ secrets.DEPLOY_USER }}
+#       ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+#       host-key: ${{ secrets.DEPLOY_HOST_KEY }}
+name: deploy-tools deploy
+description: Publica um .tar.gz como nova release em /var/www/<app> (releases/current) via deploy-ci.
+
+inputs:
+  app:
+    description: Nome do app no servidor (/var/www/<app>).
+    required: true
+  archive:
+    description: Caminho do .tar.gz com o conteúdo da release.
+    required: true
+  release-suffix:
+    description: Sufixo do release id, depois do timestamp (ex. v1.2.3). Padrão o SHA curto do commit.
+    required: false
+    default: ""
+  host:
+    description: Host do servidor (secret DEPLOY_HOST).
+    required: true
+  user:
+    description: Usuário SSH (secret DEPLOY_USER).
+    required: true
+  ssh-key:
+    description: Chave privada da CI (secret DEPLOY_SSH_KEY).
+    required: true
+  host-key:
+    description: Linha(s) do known_hosts do servidor (secret DEPLOY_HOST_KEY).
+    required: true
+
+outputs:
+  release-id:
+    description: Id da release publicada.
+    value: ${{ steps.deploy.outputs.release-id }}
+
+runs:
+  using: composite
+  steps:
+    - id: deploy
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        ARCHIVE: ${{ inputs.archive }}
+        SUFFIX: ${{ inputs.release-suffix }}
+        DEPLOY_HOST: ${{ inputs.host }}
+        DEPLOY_USER: ${{ inputs.user }}
+        DEPLOY_SSH_KEY: ${{ inputs.ssh-key }}
+        DEPLOY_HOST_KEY: ${{ inputs.host-key }}
+      run: |
+        set -euo pipefail
+        [ -f "$ARCHIVE" ] || { echo "::error::arquivo não encontrado: $ARCHIVE"; exit 1; }
+
+        # O id começa com timestamp: o deploy-ci ordena e poda pelo nome.
+        suffix="${SUFFIX:-${GITHUB_SHA::7}}"
+        RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-$suffix"
+        [[ "$RELEASE_ID" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "::error::release id inválido: $RELEASE_ID"; exit 1; }
+
+        # Chave e known_hosts num diretório temporário, apagado no fim.
+        dir="$(mktemp -d)"
+        trap 'rm -rf "$dir"' EXIT
+        printf '%s\n' "$DEPLOY_SSH_KEY" > "$dir/key"
+        chmod 600 "$dir/key"
+        printf '%s\n' "$DEPLOY_HOST_KEY" > "$dir/known_hosts"
+
+        ssh -i "$dir/key" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="$dir/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy $APP $RELEASE_ID" < "$ARCHIVE"
+
+        echo "release-id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+        echo "Publicado $APP -> $RELEASE_ID"

@@ -1,0 +1,526 @@
+package cli
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/charmbracelet/huh"
+
+	"github.com/vinicgobbi/deploy-tools/internal/apache"
+	"github.com/vinicgobbi/deploy-tools/internal/config"
+	"github.com/vinicgobbi/deploy-tools/internal/provision"
+	"github.com/vinicgobbi/deploy-tools/internal/tui"
+	"github.com/vinicgobbi/deploy-tools/internal/ui"
+	"github.com/vinicgobbi/deploy-tools/internal/validate"
+)
+
+// interactive is `deploy-tools` with no arguments: the full-screen TUI
+// (a line-based menu in accessible mode). Each item only collects options
+// and calls the same do* action the flag-driven commands use.
+func interactive(env *Env) error {
+	return tui.Run(env.UI, tuiApp(env), &env.P.Out)
+}
+
+func tuiApp(env *Env) tui.App {
+	isRoot := func() bool { return env.RequireRoot() == nil }
+	// rooted fails before any question, not after the whole form.
+	rooted := func(f func() error) func() error {
+		return func() error {
+			if err := env.RequireRoot(); err != nil {
+				return err
+			}
+			return f()
+		}
+	}
+	text := func(s string) func() string { return func() string { return s } }
+	apps := func(title string, filter func(provision.AppInfo) bool, empty string) string {
+		list, err := listApps(env)
+		if err != nil {
+			return ""
+		}
+		var names []string
+		for _, a := range list {
+			if filter(a) {
+				names = append(names, a.Name)
+			}
+		}
+		if len(names) == 0 {
+			return empty
+		}
+		return title + " " + strings.Join(names, ", ") + "."
+	}
+
+	return tui.App{
+		Title: "deploy-tools " + env.Version,
+		Subtitle: func() string {
+			host, _ := os.Hostname()
+			return host
+		},
+		IsRoot: isRoot,
+		Sections: []tui.Section{
+			{Title: "Apps", Items: []tui.Item{
+				{
+					Label: "Criar app", Root: true, Run: rooted(func() error { return iCreate(env) }),
+					Desc: text("Cria a pasta do app em " + env.Paths.AppsRoot + ", o .deploy.conf e o site no Apache " +
+						"(HTTPS, com o HTTP redirecionando).\n\nVocê escolhe o nome, o tipo (Laravel, React ou estático), " +
+						"o domínio e se o site já entra no ar. Nada é criado antes do resumo final."),
+					CLI: "sudo deploy-tools app create <app> --type laravel|react|static",
+				},
+				{
+					Label: "Migrar app legado", Root: true, Run: rooted(func() error { return iMigrate(env) }),
+					Desc: func() string {
+						return "Converte um app que serve direto de " + env.Paths.AppsRoot + "/<app> para o modelo de " +
+							"releases, sem tirar o site do ar: o conteúdo atual vira a primeira release e o site do " +
+							"Apache passa a apontar para ela.\n\n" +
+							apps("Precisam migrar:", needsMigration, "Nenhum app precisa migrar.")
+					},
+					CLI: "sudo deploy-tools app migrate <app> --type ...",
+				},
+				{
+					Label: "Status de um app", Run: func() error { return iStatus(env) },
+					Desc: text("Mostra o endereço, o tipo, a release no ar, as releases guardadas e o que falta " +
+						"para o app ficar no ar."),
+					CLI: "deploy-tools app status <app>",
+				},
+				{
+					Label: "Listar apps", Run: func() error { return doList(env) },
+					Desc: func() string { return tui.Capture(env.UI, func() { _ = doList(env) }) },
+					CLI:  "deploy-tools app list",
+				},
+				{
+					Label: "Rollback", Root: true, Run: rooted(func() error { return iRollback(env) }),
+					Desc: text("Volta um app para uma release anterior que ainda está em disco. Não refaz o build: " +
+						"só troca a release ativa, na hora.\n\nO próximo push publica uma release nova normalmente."),
+					CLI: "sudo deploy-tools release rollback <app> [release]",
+				},
+				{
+					Label: "Configurar app", Root: true, Run: rooted(func() error { return iConfig(env) }),
+					Desc: func() string {
+						return "Grava o .deploy.conf dos apps já migrados que ainda não têm: o tipo e, no Laravel, " +
+							"se o deploy roda as migrations. Com ele, o deploy do Laravel passa a rodar storage:link " +
+							"e os caches.\n\n" +
+							apps("Sem .deploy.conf:", needsConf, "Todos os apps migrados já têm .deploy.conf. "+
+								"Para mudar a config de um, use o comando abaixo.")
+					},
+					CLI: "sudo deploy-tools app config <app> [--type t] [--migrate-on-deploy]",
+				},
+				{
+					Label: "Ativar site", Root: true, Run: rooted(func() error { return iEnable(env) }),
+					Desc: func() string {
+						return "Coloca no ar o site de um app (a2ensite). A config do Apache é testada antes de mexer " +
+							"e de novo depois; o Apache só recarrega se passar, senão o site é desativado de novo.\n\n" +
+							"Confira antes o DNS e o certificado.\n\n" +
+							apps("Sites desativados:", func(a provision.AppInfo) bool { return a.Vhost != "" && !a.VhostEnabled }, "Nenhum site desativado.")
+					},
+					CLI: "sudo deploy-tools app enable <app>",
+				},
+				{
+					Label: "Desativar site", Root: true, Run: rooted(func() error { return iDisable(env) }),
+					Desc: func() string {
+						return "Tira do ar o site de um app (a2dissite), com as mesmas checagens do Ativar. " +
+							"Os arquivos, as releases e o deploy pela CI continuam; para voltar, use Ativar site.\n\n" +
+							apps("Sites ativos:", func(a provision.AppInfo) bool { return a.Vhost != "" && a.VhostEnabled }, "Nenhum site ativo.")
+					},
+					CLI: "sudo deploy-tools app disable <app>",
+				},
+				{
+					Label: "Domínios", Root: true, Run: rooted(func() error { return iDomains(env) }),
+					Desc: text("Adiciona ou remove domínios do site de um app. O primeiro é o principal (ServerName); " +
+						"os outros viram ServerAlias.\n\nSe o certificado atual não cobrir os domínios novos, procura " +
+						"um que cubra e troca. Um site ativo é testado antes e depois, e restaurado se algo falhar."),
+					CLI: "sudo deploy-tools app domain add|remove <app> <domínio>...",
+				},
+				{
+					Label: "Certificado TLS", Root: true, Run: rooted(func() error { return iCert(env) }),
+					Desc: func() string {
+						return "Procura no servidor um certificado válido que cubra todos os domínios do site, com a " +
+							"chave correspondente, e troca no site. Use depois de emitir ou renovar (ex.: certbot).\n\n" +
+							"Procura em: " + strings.Join(env.Paths.CertDirs, ", ") + ".\n\n" +
+							apps("Com certificado provisório:", func(a provision.AppInfo) bool { return a.CertFile == config.FallbackCert },
+								"Nenhum site com o certificado provisório.")
+					},
+					CLI: "sudo deploy-tools app cert <app> [--cert arquivo --key arquivo]",
+				},
+			}},
+			{Title: "Servidor", Items: []tui.Item{
+				{
+					Label: "Chaves da CI", Run: func() error { return doKeys(env) },
+					Desc: func() string {
+						return "Chaves SSH autorizadas para o usuário " + env.Paths.DeployUser + ". Cada uma só pode " +
+							"rodar o deploy-ci, nunca abrir um shell.\n\n" + tui.Capture(env.UI, func() { _ = doKeys(env) })
+					},
+					CLI: "sudo deploy-tools key list",
+				},
+				{
+					Label: "Adicionar chave", Root: true, Run: rooted(func() error { return iAddKey(env) }),
+					Desc: text("Autoriza uma chave pública (.pub) da CI, restrita ao comando de deploy.\n\n" +
+						"Gere o par na sua máquina, não no servidor:\n" +
+						"ssh-keygen -t ed25519 -C ci-deploy -f ci_deploy_key -N \"\""),
+					CLI: "sudo deploy-tools key add <arquivo.pub>",
+				},
+				{
+					Label: "Instalar/atualizar", Root: true, Run: rooted(func() error { return iInstall(env) }),
+					Desc: text("Instala este binário (" + env.Version + ") em " + env.Paths.BinDir + " e troca o " +
+						"deploy-ci de forma atômica. Não mexe em usuário, chaves nem apps: os próximos " +
+						"deploys da CI já usam a versão nova."),
+					CLI: "sudo deploy-tools server install",
+				},
+				{
+					Label: "Setup de servidor", Root: true, Run: rooted(func() error { return iSetup(env) }),
+					Desc: text("Prepara um servidor novo: cria (ou corrige) o usuário " + env.Paths.DeployUser +
+						", instala o binário e, se você informar, autoriza a chave da CI. Pode rodar de novo sem problema."),
+					CLI: "sudo deploy-tools server setup [--key arquivo.pub]",
+				},
+				{
+					Label: "Certificados TLS", Run: func() error { return certsCmd(env).RunE(nil, nil) },
+					Desc: text("Lista os certificados que o deploy-tools encontra no servidor e pode usar nos sites, " +
+						"com os domínios e a validade.\n\nPara fixar um certificado ou procurar em outras pastas, " +
+						"configure " + config.File + " (SSL_CERT_FILE, SSL_CERT_KEY, SSL_SEARCH_DIRS)."),
+					CLI: "deploy-tools server certs",
+				},
+			}},
+		},
+	}
+}
+
+// listApps is env.P.Apps, with a missing apps root meaning no apps.
+func listApps(env *Env) ([]provision.AppInfo, error) {
+	apps, err := env.P.Apps()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return apps, err
+}
+
+// selectApp offers the apps that pass filter, with their situation; empty
+// is the error when none does.
+func selectApp(env *Env, title string, filter func(provision.AppInfo) bool, empty string) (string, error) {
+	apps, err := listApps(env)
+	if err != nil {
+		return "", err
+	}
+	nameW := 0
+	for _, a := range apps {
+		nameW = max(nameW, len([]rune(a.Name)))
+	}
+	var opts []huh.Option[string]
+	for _, a := range apps {
+		if filter == nil || filter(a) {
+			opts = append(opts, huh.NewOption(appLine(env, a, nameW), a.Name))
+		}
+	}
+	if len(opts) == 0 {
+		return "", errors.New(empty)
+	}
+	var app string
+	err = env.UI.Select(title, &app, opts...)
+	return app, err
+}
+
+// needsMigration: still served straight from /var/www/<app>.
+func needsMigration(a provision.AppInfo) bool { return !a.Managed }
+
+// needsConf: migrated, but deploying without .deploy.conf (no hooks).
+func needsConf(a provision.AppInfo) bool { return a.Managed && a.Conf == nil }
+
+func iCreate(env *Env) error {
+	var o provision.CreateOptions
+	notExisting := func(s string) error {
+		if err := validate.AppName(s); err != nil {
+			return errors.New("use só letras, números, - e _")
+		}
+		if _, err := os.Lstat(env.Paths.AppDir(s)); err == nil {
+			return fmt.Errorf("%s já existe", env.Paths.AppDir(s))
+		}
+		return nil
+	}
+	if err := env.UI.Run(
+		huh.NewGroup(
+			huh.NewInput().Title("Nome do app").
+				Description("Vira a pasta em "+env.Paths.AppsRoot+" e o APP_NAME do workflow.").
+				Placeholder("minha-api").Value(&o.App).Validate(notExisting),
+			huh.NewSelect[string]().Title("Que tipo de projeto é?").Options(typeOptions()...).Value(&o.Type),
+		),
+	); err != nil {
+		return err
+	}
+	o.Defaults(env.Paths.DomainSuffix)
+	defaultDomains := strings.Join(o.Domains, ", ")
+	var domains string
+	domain := huh.NewInput().Title("Domínios").Value(&domains).Validate(func(s string) error {
+		ds := provision.NormalizeDomains([]string{s})
+		if len(ds) == 0 && defaultDomains != "" {
+			return nil
+		}
+		if len(ds) == 0 {
+			return validate.Domain("")
+		}
+		for _, d := range ds {
+			if err := validate.Domain(d); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if defaultDomains != "" {
+		domain = domain.Description("Separados por vírgula; o 1º é o principal. Enter para usar " + defaultDomains).Placeholder(defaultDomains)
+	} else {
+		domain = domain.Description("Separados por vírgula; o 1º é o principal.").Placeholder("app.example.com, www.app.example.com")
+	}
+	fields := []huh.Field{domain}
+	if o.Type == validate.Laravel {
+		fields = append(fields, huh.NewConfirm().Title("Rodar as migrations do banco a cada deploy?").
+			Description("php artisan migrate --force, depois de publicar a release.").
+			Affirmative("Sim").Negative("Não").Value(&o.MigrateOnDeploy))
+	}
+	fields = append(fields, huh.NewConfirm().Title("Colocar o site no ar agora?").
+		Description("Ativa no Apache e recarrega. Escolha Não se o DNS ou o certificado ainda não estão prontos.").
+		Affirmative("Sim").Negative("Não").Value(&o.Enable))
+	if err := env.UI.Run(huh.NewGroup(fields...)); err != nil {
+		return err
+	}
+	if ds := provision.NormalizeDomains([]string{domains}); len(ds) > 0 {
+		o.Domains = ds
+	}
+
+	env.UI.Title("Resumo")
+	summary := [][2]string{
+		{"app", o.App},
+		{"tipo", typeName(o.Type)},
+		{"domínios", strings.Join(o.Domains, ", ")},
+		{"no ar agora", yesNo(o.Enable)},
+	}
+	if o.Type == validate.Laravel {
+		summary = append(summary, [2]string{"migrations no deploy", yesNo(o.MigrateOnDeploy)})
+	}
+	env.UI.KV(summary...)
+	env.UI.Println()
+	if err := confirm(env, false, "Criar o app?", ""); err != nil {
+		return err
+	}
+	return doCreate(env, o)
+}
+
+func iMigrate(env *Env) error {
+	app, err := selectApp(env, "Qual app migrar?", needsMigration,
+		"nenhum app precisa migrar: todos em "+env.Paths.AppsRoot+" já estão no modelo de releases")
+	if err != nil {
+		return err
+	}
+	o := provision.MigrateOptions{App: app}
+	detected := detectLegacyType(env.Paths.AppDir(app))
+	o.Type = detected
+	if err := env.UI.Select("Que tipo de projeto é? (parece "+typeName(detected)+")", &o.Type, typeOptions()...); err != nil {
+		return err
+	}
+	if o.Type == validate.Laravel {
+		if o.MigrateOnDeploy, err = env.UI.Confirm("Rodar as migrations do banco a cada deploy?", "php artisan migrate --force"); err != nil {
+			return err
+		}
+	}
+
+	// Offer a manual pick when detection is ambiguous.
+	root := env.Paths.AppDir(app)
+	found, _ := apache.FindVhosts(env.Paths.SitesEnabled, root, filepath.Join(root, "public"))
+	if len(found) != 1 {
+		matches, _ := filepath.Glob(filepath.Join(env.Paths.SitesAvail, "*.conf"))
+		if len(matches) == 0 {
+			return errors.New("nenhum site do Apache encontrado em " + env.Paths.SitesAvail)
+		}
+		var opts []huh.Option[string]
+		for _, m := range matches {
+			opts = append(opts, huh.NewOption(filepath.Base(m), m))
+		}
+		title := "Não achei um site ativo do Apache apontando para " + root + ". Qual arquivo editar?"
+		if len(found) > 1 {
+			title = "Mais de um site do Apache aponta para " + root + ". Qual arquivo editar?"
+		}
+		if err := env.UI.Select(title, &o.Vhost, opts...); err != nil {
+			return err
+		}
+	}
+	return doMigrate(env, o, false)
+}
+
+func detectLegacyType(dir string) string {
+	if _, err := os.Stat(filepath.Join(dir, "artisan")); err == nil {
+		return validate.Laravel
+	}
+	if _, err := os.Stat(filepath.Join(dir, "assets")); err == nil {
+		return validate.React
+	}
+	return validate.Static
+}
+
+func iStatus(env *Env) error {
+	app, err := selectApp(env, "Qual app?", nil, "nenhum app em "+env.Paths.AppsRoot)
+	if err != nil {
+		return err
+	}
+	return doStatus(env, app)
+}
+
+func iRollback(env *Env) error {
+	app, err := selectApp(env, "Rollback de qual app?", func(a provision.AppInfo) bool { return a.Managed && len(a.Releases) > 1 },
+		"nenhum app tem uma release anterior em disco para voltar")
+	if err != nil {
+		return err
+	}
+	rels, err := env.P.Releases().List(app)
+	if err != nil {
+		return err
+	}
+	now := env.now()
+	var opts []huh.Option[string]
+	for _, r := range rels {
+		if !r.Current {
+			opts = append(opts, huh.NewOption(releaseLabel(r.ID, now), r.ID))
+		}
+	}
+	id, _ := previousRelease(rels)
+	cur := env.P.Releases().CurrentID(app)
+	if err := env.UI.Run(huh.NewGroup(huh.NewSelect[string]().Title("Voltar para qual release?").
+		Description("No ar agora: " + releaseLabel(cur, now)).
+		Options(opts...).Value(&id))); err != nil {
+		return err
+	}
+	return doRollback(env, app, id, false)
+}
+
+func iConfig(env *Env) error {
+	app, err := selectApp(env, "Configurar qual app?", needsConf,
+		"todos os apps migrados já têm .deploy.conf (para mudar um: sudo deploy-tools app config <app>)")
+	if err != nil {
+		return err
+	}
+	return doConfig(env, app, "", nil)
+}
+
+func iEnable(env *Env) error {
+	app, err := selectApp(env, "Ativar o site de qual app?", func(a provision.AppInfo) bool {
+		return a.Vhost != "" && !a.VhostEnabled
+	}, "nenhum site desativado")
+	if err != nil {
+		return err
+	}
+	return doEnable(env, app, false)
+}
+
+func iDisable(env *Env) error {
+	app, err := selectApp(env, "Desativar o site de qual app?", func(a provision.AppInfo) bool {
+		return a.Vhost != "" && a.VhostEnabled
+	}, "nenhum site ativo")
+	if err != nil {
+		return err
+	}
+	return doDisable(env, app, false)
+}
+
+func iDomains(env *Env) error {
+	app, err := selectApp(env, "Domínios de qual app?", func(a provision.AppInfo) bool { return a.Vhost != "" }, "nenhum app com site no Apache")
+	if err != nil {
+		return err
+	}
+	cur, err := env.P.Domains(app)
+	if err != nil {
+		return err
+	}
+	env.UI.KV([2]string{"domínios atuais", strings.Join(cur, ", ")})
+	action := "add"
+	if err := env.UI.Select("O que fazer?", &action,
+		huh.NewOption("Adicionar domínios", "add"),
+		huh.NewOption("Remover domínios", "remove"),
+	); err != nil {
+		return err
+	}
+	if action == "remove" {
+		var rm []string
+		opts := make([]huh.Option[string], 0, len(cur))
+		for _, d := range cur {
+			opts = append(opts, huh.NewOption(d, d))
+		}
+		if err := env.UI.Run(huh.NewGroup(huh.NewMultiSelect[string]().Title("Remover quais?").Options(opts...).Value(&rm))); err != nil {
+			return err
+		}
+		if len(rm) == 0 {
+			return ui.ErrAborted
+		}
+		return env.P.RemoveDomains(app, rm)
+	}
+	var add string
+	if err := env.UI.Input("Domínios a adicionar (separados por vírgula)", "api.example.com, www.api.example.com", &add, func(s string) error {
+		ds := provision.NormalizeDomains([]string{s})
+		if len(ds) == 0 {
+			return validate.Domain("")
+		}
+		for _, d := range ds {
+			if err := validate.Domain(d); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return env.P.AddDomains(app, []string{add})
+}
+
+func iCert(env *Env) error {
+	app, err := selectApp(env, "Certificado de qual app?", func(a provision.AppInfo) bool { return a.CertFile != "" }, "nenhum site com HTTPS")
+	if err != nil {
+		return err
+	}
+	c, err := env.P.UpdateCert(app, provision.CertChoice{})
+	if err != nil {
+		return err
+	}
+	if c.Fallback {
+		env.UI.Warn("Nenhum certificado no servidor cobre os domínios; o site segue com o autoassinado provisório.")
+	}
+	return nil
+}
+
+func iAddKey(env *Env) error {
+	var path string
+	if err := env.UI.Input("Caminho da chave PÚBLICA (.pub)", "ci_deploy_key.pub", &path, fileExists); err != nil {
+		return err
+	}
+	return env.P.AddKey(path)
+}
+
+func iInstall(env *Env) error {
+	if err := env.P.Install(env.Self); err != nil {
+		return err
+	}
+	env.UI.OK("Instalado. Os próximos deploys da CI já usam a versão nova.")
+	return nil
+}
+
+func iSetup(env *Env) error {
+	var path string
+	if err := env.UI.Input("Chave pública da CI (.pub) — deixe vazio para pular", "", &path, func(s string) error {
+		if s == "" {
+			return nil
+		}
+		return fileExists(s)
+	}); err != nil {
+		return err
+	}
+	if err := env.P.Setup(env.Self, path); err != nil {
+		return err
+	}
+	env.UI.OK("Servidor pronto.")
+	return nil
+}
+
+func fileExists(s string) error {
+	if _, err := os.Stat(s); err != nil {
+		return errors.New("arquivo não encontrado")
+	}
+	return nil
+}
+
+func yesNo(b bool) string { return map[bool]string{true: "sim", false: "não"}[b] }

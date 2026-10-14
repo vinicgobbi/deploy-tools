@@ -1,0 +1,11 @@
+[tool.commitizen]
+name = "cz_conventional_commits"
+# The version lives only in git tags (vX.Y.Z); `make build` embeds it via
+# `git describe`, so there is no version file to bump.
+version_provider = "scm"
+tag_format = "v$version"
+version_scheme = "semver2"
+annotated_tag = true
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+major_version_zero = false

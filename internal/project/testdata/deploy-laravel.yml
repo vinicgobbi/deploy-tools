@@ -1,0 +1,100 @@
+# Gerado por deploy-dev v1.2.0 (deploy-dev init). Pode editar à
+# vontade; rode "deploy-dev check" para validar contra as convenções.
+name: Release and deploy
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  APP_NAME: api
+
+jobs:
+  # Um job só: valida, versiona (Commitizen) e publica a partir do mesmo
+  # checkout. O commit "bump:" e a tag são enviados com o GITHUB_TOKEN, que
+  # não dispara outro workflow; o "if" protege caso troque por um PAT.
+  release-and-deploy:
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'bump:')"
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: "8.4"
+          coverage: none
+
+      # O servidor tem as extensões de produção; o runner só precisa
+      # validar e montar o vendor/, sem executar a aplicação.
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist --ignore-platform-req='ext-*'
+
+      - name: Check PHP syntax
+        run: find app config routes tests -name '*.php' -print0 | xargs -0 -n50 -P4 php -l > /dev/null
+
+      - name: Check code style (Pint)
+        run: vendor/bin/pint --test
+
+      - name: Bump version with Commitizen
+        id: cz
+        uses: commitizen-tools/commitizen-action@338bbd841b75aaee6bf5340e1fa12f6ab58ff9ff # 0.27.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          changelog_increment_filename: body.md
+          push: true
+          git_name: github-actions[bot]
+          git_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Create GitHub release
+        if: steps.cz.outputs.previous_version != steps.cz.outputs.next_version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.cz.outputs.version }}
+        run: gh release create "$TAG" --title "$TAG" --notes-file body.md --verify-tag
+
+      # Reaproveita o vendor/ já baixado: remove os pacotes de dev e
+      # regenera o autoload otimizado.
+      - name: Prune dev dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --ignore-platform-req='ext-*'
+
+      - name: Package release
+        run: |
+          tar -czf "$RUNNER_TEMP/release.tar.gz" \
+            --exclude='./.git' \
+            --exclude='./.github' \
+            --exclude='./tests' \
+            --exclude='./node_modules' \
+            --exclude='./.env' \
+            --exclude='./.env.*' \
+            --exclude='./phpunit.xml' \
+            --exclude='./cz.toml' \
+            --exclude='./.cz.toml' \
+            --exclude='./body.md' \
+            --exclude='./*.code-workspace' \
+            --exclude='./package.json' \
+            --exclude='./package-lock.json' \
+            --exclude='./pnpm-lock.yaml' \
+            --exclude='./pnpm-workspace.yaml' \
+            --exclude='./vite.config.js' \
+            --exclude='./vite.config.ts' \
+            .
+
+      # Gera o release id (timestamp + sufixo), monta a chave num diretório
+      # temporário e envia o tarball ao deploy-ci do servidor.
+      - name: Deploy
+        uses: vinicgobbi/deploy-tools@66ac5741e772bfd2c2afb58b1d36527da520f3f6 # v1.2.0
+        with:
+          app: ${{ env.APP_NAME }}
+          archive: ${{ runner.temp }}/release.tar.gz
+          release-suffix: v${{ steps.cz.outputs.version }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host-key: ${{ secrets.DEPLOY_HOST_KEY }}

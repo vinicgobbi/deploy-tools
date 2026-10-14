@@ -1,0 +1,126 @@
+# Release automático: a cada push em main, testa, roda `cz bump` (só quando
+# há feat/fix/BREAKING desde a última tag), builda os binários (deploy-tools
+# para o servidor e deploy-dev para os desktops) e publica a release no
+# GitHub com eles anexados.
+#
+# Autocorreção: se não há nada para versionar mas a última tag ainda não tem
+# release (ex.: um run anterior falhou depois do bump), ela é publicada.
+#
+# Usa só o GITHUB_TOKEN. O push do commit "bump:" e da tag feito com ele não
+# dispara outro workflow; os jobs ainda se ignoram quando o commit é o
+# próprio "bump:", caso o token seja trocado por um PAT. Se main for
+# protegida, libere o push do github-actions[bot] ou use um PAT.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Um release por vez. Os runs disparados pelo próprio commit "bump:" (que
+# não fazem nada) ficam num grupo à parte: entrar no grupo "release"
+# cancelaria o job publish ainda pendente do run que fez o bump.
+concurrency:
+  group: ${{ startsWith(github.event.head_commit.message, 'bump:') && format('bump-{0}', github.sha) || 'release' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: ${{ !startsWith(github.event.head_commit.message, 'bump:') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  bump:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit "bump:" + tag
+    outputs:
+      publish: ${{ steps.bump.outputs.publish }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # cz precisa do histórico e das tags
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: pip install commitizen==4.19.1
+      - id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set +e
+          cz bump --yes
+          code=$?
+          set -e
+          version="$(cz version --project)"
+          case "$code" in
+            0)
+              git push --atomic origin HEAD:main "v$version"
+              ;;
+            3|21) # 3 = nenhum commit novo, 21 = só commits que não geram versão
+              if gh release view "v$version" > /dev/null 2>&1; then
+                echo "Nada para versionar; v$version já tem release."
+                echo "publish=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              git rev-parse -q --verify "refs/tags/v$version" > /dev/null \
+                || { echo "::error::tag v$version não existe"; exit 1; }
+              echo "v$version ainda não tem release; publicando."
+              ;;
+            *)
+              exit "$code"
+              ;;
+          esac
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: bump
+    if: needs.bump.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # criar a release e anexar os binários
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: v${{ needs.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: v${{ needs.bump.outputs.version }}
+          fetch-depth: 0 # git describe precisa das tags
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      # deploy-tools (servidor, linux/amd64) e deploy-dev (desktops: linux,
+      # macOS e Windows), cada um com seu .sha256. O deploy-dev embute o SHA
+      # do commit da tag, que o `deploy-dev init` usa para fixar a action.
+      - name: Build
+        run: |
+          make dist VERSION="$TAG"
+          ./dist/deploy-tools-linux-amd64 version
+          ./dist/deploy-dev-linux-amd64 version
+          ls -l dist/
+
+      - name: Publicar release
+        run: |
+          # Notas = seção da versão no CHANGELOG.md gerado pelo cz bump.
+          awk -v h="## $TAG " 'index($0, h) == 1 {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          # Reaproveita a release se o job for re-executado.
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag
+          fi
+          gh release upload "$TAG" dist/* --clobber
+          echo "release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG"

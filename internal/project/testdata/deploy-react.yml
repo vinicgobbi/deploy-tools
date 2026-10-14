@@ -1,0 +1,97 @@
+# Gerado por deploy-dev v1.2.0 (deploy-dev init). Pode editar à
+# vontade; rode "deploy-dev check" para validar contra as convenções.
+name: Release and deploy
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  APP_NAME: front
+
+jobs:
+  # Um job só: valida, versiona (Commitizen) e publica a partir do mesmo
+  # checkout. O commit "bump:" e a tag são enviados com o GITHUB_TOKEN, que
+  # não dispara outro workflow; o "if" protege caso troque por um PAT.
+  release-and-deploy:
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'bump:')"
+
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      # GitHub Packages (npm.pkg.github.com). O token vai no ~/.npmrc do
+      # runner, fora do repositório: o "cz bump" faz "git commit -a" e
+      # levaria o token junto num .npmrc versionado.
+      - name: Configure registry auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" >> "$HOME/.npmrc"
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Bump version with Commitizen
+        id: cz
+        uses: commitizen-tools/commitizen-action@338bbd841b75aaee6bf5340e1fa12f6ab58ff9ff # 0.27.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          changelog_increment_filename: body.md
+          push: true
+          git_name: github-actions[bot]
+          git_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Create GitHub release
+        if: steps.cz.outputs.previous_version != steps.cz.outputs.next_version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.cz.outputs.version }}
+        run: gh release create "$TAG" --title "$TAG" --notes-file body.md --verify-tag
+
+      - name: Build
+        env:
+          VITE_API_URL_API: ${{ vars.VITE_API_URL_API }}
+          VITE_API_URL_GQL: ${{ vars.VITE_API_URL_GQL }}
+        run: |
+          set -euo pipefail
+          for var in VITE_API_URL_API VITE_API_URL_GQL; do
+            if [ -z "${!var}" ]; then
+              echo "Variável $var não configurada no repositório." >&2
+              exit 1
+            fi
+          done
+          pnpm build
+
+      - name: Package release
+        run: tar -czf "$RUNNER_TEMP/release.tar.gz" -C dist .
+
+      # Gera o release id (timestamp + sufixo), monta a chave num diretório
+      # temporário e envia o tarball ao deploy-ci do servidor.
+      - name: Deploy
+        uses: vinicgobbi/deploy-tools@66ac5741e772bfd2c2afb58b1d36527da520f3f6 # v1.2.0
+        with:
+          app: ${{ env.APP_NAME }}
+          archive: ${{ runner.temp }}/release.tar.gz
+          release-suffix: v${{ steps.cz.outputs.version }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host-key: ${{ secrets.DEPLOY_HOST_KEY }}
