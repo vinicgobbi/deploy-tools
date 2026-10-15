@@ -1,3 +1,9 @@
+## v0.10.0 (2026-10-15)
+
+### Feat
+
+- atualização automática do deploy-tools e do deploy-dev
+
 ## v0.9.0 (2026-10-15)
 
 ### Feat
