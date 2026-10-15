@@ -426,6 +426,18 @@ Sai com código 1 se houver erros (ou avisos, com --strict).`,
 	return cmd
 }
 
+// where is the "file:line: " prefix of a finding; findings about the whole
+// project (no workflow at all) have none.
+func where(f project.Finding) string {
+	switch {
+	case f.Line > 0:
+		return fmt.Sprintf("%s:%d: ", f.File, f.Line)
+	case f.File != "" && f.File != ".":
+		return f.File + ": "
+	}
+	return ""
+}
+
 func runCheck(env *Env, dir string, strict bool) error {
 	fs, err := project.Check(dir, env.Commit, env.Version)
 	if err != nil {
@@ -434,13 +446,14 @@ func runCheck(env *Env, dir string, strict bool) error {
 	counts := map[project.Level]int{}
 	for _, f := range fs {
 		counts[f.Level]++
+		msg := where(f) + f.Msg
 		switch f.Level {
 		case project.Error:
-			env.UI.Println(ui.ErrorText(f.File + ":" + fmt.Sprint(f.Line) + ": " + f.Msg))
+			env.UI.Println(ui.ErrorText(msg))
 		case project.Warn:
-			env.UI.Warn("%s:%d: %s", f.File, f.Line, f.Msg)
+			env.UI.Warn("%s", msg)
 		default:
-			env.UI.Println(env.UI.Faint(fmt.Sprintf("  %s:%d: %s", f.File, f.Line, f.Msg)))
+			env.UI.Println(env.UI.Faint("  " + msg))
 		}
 	}
 	if counts[project.Error] == 0 && counts[project.Warn] == 0 {

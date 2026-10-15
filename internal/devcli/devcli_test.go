@@ -158,3 +158,10 @@ func runWith(t *testing.T, input string, adjust func(*Env), args ...string) (str
 	err := root.Execute()
 	return out.String(), err
 }
+
+func TestCheckWithoutWorkflowHasNoEmptyLocation(t *testing.T) {
+	out, err := run(t, "", ref, "check", ".")
+	if err == nil || strings.Contains(out, ".:0:") || !strings.Contains(out, "nenhum workflow em .github/workflows") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
