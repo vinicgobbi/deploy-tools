@@ -61,8 +61,6 @@ func appCmd(env *Env) *cobra.Command {
 sites-available. Sem --enable, o vhost não é ativado: revise DNS e
 certificado e depois rode "deploy-tools app enable <app>".
 
-Todo domínio ganha também o alias www.<domínio> (--no-www evita).
-
 Sem --domain, o app ganha <subdomínio>.<domínio coringa> (cadastrados com
 "deploy-tools server domain add"): com um só, ele é usado direto; com
 vários, o comando pergunta qual (ou use --base/--sub).
@@ -72,7 +70,7 @@ pastas do Apache e SSL_SEARCH_DIRS de /etc/deploy-tools.conf): vale o que
 cobrir todos os domínios. Sem nenhum (num terminal, o comando oferece
 informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <app>".`,
 		Example: `  sudo deploy-tools app create minha-api --type laravel
-  sudo deploy-tools app create meu-front --type react --domain app.example.com --enable   # + www.app.example.com
+  sudo deploy-tools app create meu-front --type react --domain app.example.com --domain www.app.example.com --enable
   sudo deploy-tools app create docs --type static --base vinicgobbi.dev.br            # docs.vinicgobbi.dev.br
   sudo deploy-tools app create painel --type react --base vinicgobbi.dev.br --sub admin`,
 		Args: cobra.MaximumNArgs(1),
@@ -102,7 +100,6 @@ informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <a
 	createCmd.Flags().StringVarP(&create.Type, "type", "t", "", "laravel | symfony | react | angular | static")
 	createCmd.Flags().StringSliceVarP(&create.Domains, "domain", "d", nil,
 		"domínio; repita ou separe por vírgula para vários, o 1º é o principal (padrão: <sub>.<domínio coringa>)")
-	createCmd.Flags().BoolVar(&create.NoWWW, "no-www", false, "não adiciona o alias www.<domínio> a cada domínio")
 	createCmd.Flags().StringVar(&create.Base, "base", "", "domínio coringa cadastrado a usar (server domain list)")
 	createCmd.Flags().StringVar(&create.Sub, "sub", "", "subdomínio no --base (padrão: o nome do app)")
 	createCmd.MarkFlagsMutuallyExclusive("domain", "base")

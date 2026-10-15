@@ -64,16 +64,11 @@ func TestCreateWithBaseDomains(t *testing.T) {
 		t.Fatal(err)
 	}
 	vhost := read(t, p.Paths.VhostFile("minha_api"))
-	if got := apache.Domains(vhost); strings.Join(got, " ") != "minha-api.vinicgobbi.dev.br www.minha-api.vinicgobbi.dev.br" {
+	if got := apache.Domains(vhost); len(got) != 1 || got[0] != "minha-api.vinicgobbi.dev.br" {
 		t.Fatalf("domains = %v", got)
 	}
-	// *.vinicgobbi.dev.br does not cover www.minha-api.vinicgobbi.dev.br,
-	// but the site must still get HTTPS (with a warning), not HTTP only.
 	if f, _, _ := apache.CertFiles(vhost); f != full {
 		t.Fatalf("wildcard cert not used: %q", f)
-	}
-	if out := p.Out.(interface{ String() string }).String(); !strings.Contains(out, "não cobre www.minha-api.vinicgobbi.dev.br") {
-		t.Fatalf("no warning:\n%s", out)
 	}
 	if err := p.Create(CreateOptions{App: "front", Type: "react", Base: "vinicgobbi.dev.br", Sub: "app"}); err != nil {
 		t.Fatal(err)

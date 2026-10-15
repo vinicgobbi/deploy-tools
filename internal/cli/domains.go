@@ -23,7 +23,6 @@ func domainCmd(env *Env) *cobra.Command {
 		Use:   "domain",
 		Short: "Domínios do site de um app (listar, adicionar, remover)",
 		Long: `O primeiro domínio é o ServerName do site; os outros são ServerAlias.
-Todo domínio cadastrado ganha também o alias www.<domínio> (--no-www evita).
 Ao adicionar ou remover, se o certificado atual não cobrir o novo conjunto,
 o deploy-tools procura um que cubra e troca. Um site ativo é alterado com
 configtest antes e depois, e restaurado se algo falhar.`,
@@ -53,32 +52,29 @@ configtest antes e depois, e restaurado se algo falhar.`,
 			return nil
 		},
 	})
-	var noWWW bool
-	add := &cobra.Command{
+	dom.AddCommand(&cobra.Command{
 		Use:               "add <app> <domínio>...",
-		Short:             "Adiciona um ou mais domínios ao site (cada um com o alias www.)",
-		Example:           "  sudo deploy-tools app domain add minha-api api.example.com      # + www.api.example.com",
+		Short:             "Adiciona um ou mais domínios ao site",
+		Example:           "  sudo deploy-tools app domain add minha-api api.example.com www.api.example.com",
 		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeApps(env),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if err := env.RequireRoot(); err != nil {
 				return err
 			}
-			if err := env.P.AddDomains(args[0], args[1:], !noWWW); err != nil {
+			if err := env.P.AddDomains(args[0], args[1:]); err != nil {
 				return err
 			}
 			env.UI.OK("Domínios atualizados.")
-			env.UI.Hint("Confirme que o DNS dos domínios novos (e do www.) aponta para este servidor.")
+			env.UI.Hint("Confirme que o DNS dos domínios novos aponta para este servidor.")
 			return nil
 		},
-	}
-	add.Flags().BoolVar(&noWWW, "no-www", false, "não adiciona o alias www.<domínio>")
-	dom.AddCommand(add)
+	})
 	dom.AddCommand(&cobra.Command{
 		Use:               "remove <app> <domínio>...",
 		Aliases:           []string{"rm"},
 		Short:             "Remove um ou mais domínios do site",
-		Long:              "Remove também o www.<domínio>. Remover o domínio principal promove o seguinte. O último domínio não pode ser removido.",
+		Long:              "Remover o domínio principal promove o seguinte. O último domínio não pode ser removido.",
 		Example:           "  sudo deploy-tools app domain remove minha-api antigo.example.com",
 		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeApps(env),

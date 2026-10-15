@@ -72,7 +72,7 @@ func chooseDomains(env *Env, app string, extras bool) ([]string, error) {
 			ds := []string{s + "." + choice}
 			if extras {
 				var more string
-				if err := env.UI.Input("Outros domínios (opcional, separados por vírgula; o www. de cada um entra sozinho)", "", &more,
+				if err := env.UI.Input("Outros domínios (opcional, separados por vírgula)", "www."+ds[0], &more,
 					func(s string) error { return validDomains(s, true) }); err != nil {
 					return nil, err
 				}
@@ -82,7 +82,7 @@ func chooseDomains(env *Env, app string, extras bool) ([]string, error) {
 		}
 	}
 	var s string
-	if err := env.UI.Input("Domínios (separados por vírgula; o 1º é o principal; o www. de cada um entra sozinho)", "app.example.com", &s,
+	if err := env.UI.Input("Domínios (separados por vírgula; o 1º é o principal)", "app.example.com, www.app.example.com", &s,
 		func(s string) error { return validDomains(s, false) }); err != nil {
 		return nil, err
 	}

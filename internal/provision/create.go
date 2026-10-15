@@ -21,37 +21,29 @@ type CreateOptions struct {
 	Base            string     // registered base domain; default: the only one registered
 	Sub             string     // subdomain of Base; default: SubdomainFor(App)
 	Cert            CertChoice // optional explicit certificate (File+Key[+Chain]); found automatically otherwise
-	NoWWW           bool       // do not add www.<domain> aliases
-	MigrateOnDeploy bool       // laravel/symfony
+	MigrateOnDeploy bool       // laravel only
 	Enable          bool       // a2ensite + configtest + reload
 }
 
-// Defaults fills Domains from Base/Sub when no domain was given (with a
-// single registered base it is used without asking) and, unless NoWWW,
-// gives every domain its www. alias. It can run more than once.
+// Defaults fills Domains from Base/Sub when no domain was given. With a
+// single registered base it is used without asking.
 func (o *CreateOptions) Defaults(bases []string) {
 	o.Domains = NormalizeDomains(o.Domains)
-	if len(o.Domains) == 0 && o.App != "" {
-		o.Domains = o.baseDomain(bases)
+	if len(o.Domains) > 0 || o.App == "" {
+		return
 	}
-	if !o.NoWWW {
-		o.Domains = WithWWW(o.Domains)
-	}
-}
-
-func (o *CreateOptions) baseDomain(bases []string) []string {
 	base := config.NormalizeBase(o.Base)
 	if base == "" && len(bases) == 1 {
 		base = bases[0]
 	}
 	if base == "" {
-		return nil
+		return
 	}
 	sub := strings.ToLower(strings.Trim(strings.TrimSpace(o.Sub), "."))
 	if sub == "" {
 		sub = SubdomainFor(o.App)
 	}
-	return []string{sub + "." + base}
+	o.Domains = []string{sub + "." + base}
 }
 
 // SubdomainFor turns an app name into a hostname label ("minha_api" ->

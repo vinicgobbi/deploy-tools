@@ -211,23 +211,15 @@ oferece informar os arquivos do certificado.
 
 Um site pode ter vários domínios: o primeiro é o principal (`ServerName`), e
 os outros viram `ServerAlias`. A porta 80 redireciona cada domínio para ele
-mesmo em HTTPS. **Todo domínio cadastrado ganha também o alias
-`www.<domínio>`**, no `app create` e no `app domain add`. Remover um domínio
-remove o `www.` dele junto. Para não ter o alias, use `--no-www`.
+mesmo em HTTPS. O `www.` não é mais adicionado automaticamente: inclua-o
+como um domínio, se quiser.
 
 ```bash
-sudo deploy-tools app create loja --type react -d loja.example.com    # + www.loja.example.com
-sudo deploy-tools app domain add loja shop.example.com                # + www.shop.example.com
-sudo deploy-tools app domain remove loja shop.example.com             # sai com o www.
+sudo deploy-tools app create loja --type react -d loja.example.com -d www.loja.example.com
+sudo deploy-tools app domain add loja shop.example.com
+sudo deploy-tools app domain remove loja www.loja.example.com
 deploy-tools app domain list loja
 ```
-
-Sobre o certificado do `www.`: um coringa `*.example.com` cobre
-`www.example.com`, que está um nível abaixo, mas não cobre
-`www.api.example.com`, que está dois níveis abaixo. Se nenhum certificado
-cobrir também os `www.`, o deploy-tools usa o que cobre os outros domínios e
-avisa quais `www.` ficaram descobertos. Assim o site não cai para só HTTP
-por causa deles.
 
 Ao adicionar ou remover domínios, se o certificado atual não cobrir o novo
 conjunto, o `deploy-tools` procura um que cubra e troca. Se não achar, ele
