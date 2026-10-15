@@ -31,6 +31,7 @@ func fixture(t *testing.T, kind string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), map[string]string{
 		"laravel": "api", "react": "front", "mkdocs": "company-docs", "plain": "site",
+		"symfony": "loja", "angular": "painel",
 	}[kind])
 	switch kind {
 	case "laravel":
@@ -47,6 +48,17 @@ func fixture(t *testing.T, kind string) string {
 		write(t, dir, "cz.toml", "")
 		write(t, dir, ".npmrc", "@acme:registry=https://npm.pkg.github.com\n")
 		write(t, dir, ".env.example", "# c\nVITE_API_URL_API=x\nVITE_API_URL_GQL=y\nOTHER=1\n")
+	case "symfony":
+		write(t, dir, "bin/console", "#!/usr/bin/env php")
+		write(t, dir, "composer.json", `{"require":{"php":">=8.3","symfony/framework-bundle":"7.3.*","symfony/asset-mapper":"7.3.*"}}`)
+		write(t, dir, "public/index.php", "<?php")
+		for _, d := range []string{"src", "config", "migrations"} {
+			write(t, dir, d+"/x.php", "<?php")
+		}
+	case "angular":
+		write(t, dir, "package.json", `{"scripts":{"build":"ng build","lint":"ng lint"},"dependencies":{"@angular/core":"^20"}}`)
+		write(t, dir, "package-lock.json", "{}")
+		write(t, dir, "angular.json", `{"projects":{"painel":{"projectType":"application","architect":{"build":{"builder":"@angular/build:application","options":{"outputPath":"dist/painel"}}}}}}`)
 	case "mkdocs":
 		write(t, dir, "mkdocs.yml", "site_name: x")
 		write(t, dir, "requirements.txt", "mkdocs")
@@ -66,6 +78,15 @@ func TestDetect(t *testing.T) {
 	if r.Type != React || r.App != "front" || r.PackageManager != "pnpm" || !r.Lint || !r.PrivateRegistry ||
 		strings.Join(r.ViteVars, ",") != "VITE_API_URL_API,VITE_API_URL_GQL" || r.OutputDir != "dist" {
 		t.Errorf("react: %+v", r)
+	}
+	s := Detect(fixture(t, "symfony"))
+	if s.Type != Symfony || s.PHPVersion != "8.3" || !s.AssetMapper || s.ViteAssets || s.Pint ||
+		strings.Join(s.PHPDirs, ",") != "src,config,migrations,public" {
+		t.Errorf("symfony: %+v", s)
+	}
+	a := Detect(fixture(t, "angular"))
+	if a.Type != Angular || a.OutputDir != "dist/painel/browser" || !a.Lint || a.PackageManager != "npm" {
+		t.Errorf("angular: %+v", a)
 	}
 	m := Detect(fixture(t, "mkdocs"))
 	if m.Type != Static || !m.MkDocs || !m.Requirements || m.OutputDir != "site" || m.Commitizen {
@@ -96,7 +117,7 @@ func golden(t *testing.T, name, got string) {
 }
 
 func TestRenderGoldenAndClean(t *testing.T) {
-	for _, kind := range []string{"laravel", "react", "mkdocs", "plain"} {
+	for _, kind := range []string{"laravel", "symfony", "react", "angular", "mkdocs", "plain"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := fixture(t, kind)
 			o := Detect(dir)
@@ -243,6 +264,22 @@ func TestCheckFlagsGiteaLeftovers(t *testing.T) {
 	for _, want := range []string{":3: erro: contexto gitea.*", ":1: aviso: o deploy-tools é público"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("faltou %q em:\n%s", want, all)
+		}
+	}
+}
+
+func TestAngularOutputDir(t *testing.T) {
+	for name, c := range map[string]struct{ json, want string }{
+		"legacy browser builder":    {`{"projects":{"app":{"architect":{"build":{"builder":"@angular-devkit/build-angular:browser","options":{"outputPath":"dist/app"}}}}}}`, "dist/app"},
+		"application, default path": {`{"projects":{"app":{"architect":{"build":{"builder":"@angular-devkit/build-angular:application","options":{}}}}}}`, "dist/app/browser"},
+		"object outputPath":         {`{"projects":{"app":{"architect":{"build":{"builder":"@angular/build:application","options":{"outputPath":{"base":"out","browser":""}}}}}}}`, "out"},
+		"defaultProject wins":       {`{"defaultProject":"b","projects":{"a":{},"b":{"architect":{"build":{"builder":"x:application","options":{"outputPath":"./www/"}}}}}}`, "www/browser"},
+		"libraries skipped":         {`{"projects":{"a-lib":{"projectType":"library"},"web":{"projectType":"application"}}}`, "dist/web"},
+	} {
+		dir := t.TempDir()
+		write(t, dir, "angular.json", c.json)
+		if got := angularOutputDir(dir); got != c.want {
+			t.Errorf("%s: %q, want %q", name, got, c.want)
 		}
 	}
 }

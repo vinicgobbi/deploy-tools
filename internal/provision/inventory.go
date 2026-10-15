@@ -109,8 +109,8 @@ func (p *Provisioner) Configure(app string, c appconf.Conf) error {
 	if err := p.Releases().ValidateApp(app); err != nil {
 		return err
 	}
-	if c.Type != validate.Laravel {
-		c.LaravelMigrate = false
+	if !validate.IsPHP(c.Type) {
+		c.Migrate = false
 	}
 	if err := appconf.Write(p.Paths.AppDir(app), c); err != nil {
 		return err

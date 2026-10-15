@@ -30,10 +30,10 @@ func golden(t *testing.T, name, got string) {
 }
 
 func TestRenderGolden(t *testing.T) {
-	for _, typ := range []string{"laravel", "react", "static"} {
+	for _, typ := range []string{"laravel", "symfony", "react", "angular", "static"} {
 		doc := "/var/www/app/current"
 		dir := "/var/www/app"
-		if typ == "laravel" {
+		if typ == "laravel" || typ == "symfony" {
 			doc += "/public"
 			dir = doc
 		}

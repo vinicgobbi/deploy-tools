@@ -16,11 +16,20 @@ var (
 
 const (
 	Laravel = "laravel"
+	Symfony = "symfony"
 	React   = "react"
+	Angular = "angular"
 	Static  = "static"
 )
 
-var Types = []string{Laravel, React, Static}
+var Types = []string{Laravel, Symfony, React, Angular, Static}
+
+// IsPHP: served from current/public, with .deploy.conf hooks.
+func IsPHP(t string) bool { return t == Laravel || t == Symfony }
+
+// IsSPA: client-side routed single-page app (every path falls back to
+// index.html).
+func IsSPA(t string) bool { return t == React || t == Angular }
 
 // AppName allows only [a-zA-Z0-9_-]: no path separators, no "..".
 func AppName(app string) error {
@@ -57,5 +66,5 @@ func Type(t string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("tipo inválido: %q (use laravel, react ou static)", t)
+	return fmt.Errorf("tipo inválido: %q (use laravel, symfony, react, angular ou static)", t)
 }

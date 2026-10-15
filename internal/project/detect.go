@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
 const (
 	Laravel = "laravel"
+	Symfony = "symfony"
 	React   = "react"
+	Angular = "angular"
 	Static  = "static"
 )
 
@@ -23,13 +26,14 @@ type Options struct {
 	Branch     string
 	Commitizen bool // bump + GitHub release with commitizen-action
 
-	// Laravel
-	PHPVersion string
-	Pint       bool
-	PHPDirs    []string // dirs syntax-checked with php -l
-	ViteAssets bool     // also build resources with Vite and ship public/build
+	// PHP (Laravel, Symfony)
+	PHPVersion  string
+	Pint        bool     // Laravel
+	PHPDirs     []string // dirs syntax-checked with php -l
+	ViteAssets  bool     // also build front assets with Node (Vite/Encore) and ship them
+	AssetMapper bool     // Symfony: compile AssetMapper assets (asset-map:compile)
 
-	// Node (React, or Laravel with ViteAssets)
+	// Node (React, Angular, or a PHP app with ViteAssets)
 	PackageManager  string // pnpm | npm
 	PnpmVersion     string
 	NodeVersion     string
@@ -91,11 +95,25 @@ func Detect(dir string) Options {
 				o.PHPDirs = append(o.PHPDirs, d)
 			}
 		}
+	case exists(dir, "bin/console") && exists(dir, "composer.json") && hasKey(readComposer(dir).Require, "symfony/framework-bundle"):
+		o.Type = Symfony
+		comp := readComposer(dir)
+		o.PHPVersion = phpVersion(comp.Require["php"])
+		o.AssetMapper = hasKey(comp.Require, "symfony/asset-mapper")
+		o.ViteAssets = pkg.Scripts["build"] != ""
+		for _, d := range []string{"src", "config", "migrations", "public", "tests"} {
+			if exists(dir, d) {
+				o.PHPDirs = append(o.PHPDirs, d)
+			}
+		}
 	case exists(dir, "mkdocs.yml"):
 		o.Type = Static
 		o.MkDocs = true
 		o.Requirements = exists(dir, "requirements.txt")
 		o.OutputDir = "site"
+	case exists(dir, "angular.json"):
+		o.Type = Angular
+		o.OutputDir = angularOutputDir(dir)
 	case pkg.Scripts["build"] != "" && (hasPrefixFile(dir, "vite.config.") || pkg.Deps["react"] != ""):
 		o.Type = React
 	default:
@@ -148,6 +166,66 @@ func phpVersion(constraint string) string {
 		return m[1] + "." + m[2]
 	}
 	return "8.4"
+}
+
+func hasKey(m map[string]string, k string) bool { _, ok := m[k]; return ok }
+
+// angularOutputDir finds where `ng build` writes the browser files: the
+// first (or default) project's outputPath, plus "browser" for the
+// application builder (Angular 17+), which nests them there.
+func angularOutputDir(dir string) string {
+	var ng struct {
+		DefaultProject string `json:"defaultProject"`
+		Projects       map[string]struct {
+			ProjectType string `json:"projectType"`
+			Architect   map[string]struct {
+				Builder string `json:"builder"`
+				Options struct {
+					OutputPath json.RawMessage `json:"outputPath"`
+				} `json:"options"`
+			} `json:"architect"`
+		} `json:"projects"`
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "angular.json"))
+	if err != nil || json.Unmarshal(b, &ng) != nil || len(ng.Projects) == 0 {
+		return "dist"
+	}
+	name := ng.DefaultProject
+	if _, ok := ng.Projects[name]; !ok {
+		names := make([]string, 0, len(ng.Projects))
+		for n, p := range ng.Projects {
+			if p.ProjectType == "" || p.ProjectType == "application" {
+				names = append(names, n)
+			}
+		}
+		if len(names) == 0 {
+			return "dist"
+		}
+		sort.Strings(names)
+		name = names[0]
+	}
+	build := ng.Projects[name].Architect["build"]
+	modern := strings.HasSuffix(build.Builder, ":application")
+	base, browser := "dist/"+name, "browser"
+	var s string
+	var obj struct {
+		Base    string  `json:"base"`
+		Browser *string `json:"browser"`
+	}
+	switch {
+	case json.Unmarshal(build.Options.OutputPath, &s) == nil && s != "":
+		base = s
+	case json.Unmarshal(build.Options.OutputPath, &obj) == nil && obj.Base != "":
+		base = obj.Base
+		if obj.Browser != nil {
+			browser = *obj.Browser
+		}
+	}
+	base = strings.TrimSuffix(strings.TrimPrefix(base, "./"), "/")
+	if !modern || browser == "" {
+		return base
+	}
+	return base + "/" + browser
 }
 
 func hasPrefixFile(dir, prefix string) bool {

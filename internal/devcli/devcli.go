@@ -86,10 +86,11 @@ func initCmd(env *Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Gera o .github/workflows/deploy.yml do projeto",
-		Long: `Detecta o tipo do projeto (Laravel, React ou estático/mkdocs), mostra o
-que encontrou para você confirmar ou ajustar e gera o workflow de deploy
-para o GitHub Actions: actions fixadas por SHA, Commitizen (se o projeto
-usa) e a action de deploy do deploy-tools fixada no SHA desta versão.`,
+		Long: `Detecta o tipo do projeto (Laravel, Symfony, React, Angular ou
+estático/mkdocs), mostra o que encontrou para você confirmar ou ajustar e
+gera o workflow de deploy para o GitHub Actions: actions fixadas por SHA,
+Commitizen (se o projeto usa) e a action de deploy do deploy-tools fixada
+no SHA desta versão.`,
 		Example: `  deploy-dev init                 # interativo, no diretório atual
   deploy-dev init --yes           # aceita o que foi detectado
   deploy-dev init --stdout        # só mostra, não grava`,
@@ -99,7 +100,7 @@ usa) e a action de deploy do deploy-tools fixada no SHA desta versão.`,
 	f := cmd.Flags()
 	f.StringVarP(&fl.dir, "dir", "C", ".", "diretório do projeto")
 	f.StringVar(&fl.app, "app", "", "nome do app no servidor (padrão: nome do repositório)")
-	f.StringVarP(&fl.typ, "type", "t", "", "laravel | react | static (padrão: detectado)")
+	f.StringVarP(&fl.typ, "type", "t", "", "laravel | symfony | react | angular | static (padrão: detectado)")
 	f.StringVar(&fl.branch, "branch", "", "branch que dispara o deploy (padrão: main)")
 	f.BoolVarP(&fl.yes, "yes", "y", false, "não pergunta: usa o que foi detectado")
 	f.BoolVar(&fl.force, "force", false, "sobrescreve um deploy.yml existente")
@@ -182,8 +183,12 @@ func typeName(t string) string {
 	switch t {
 	case project.Laravel:
 		return "Laravel"
+	case project.Symfony:
+		return "Symfony"
 	case project.React:
 		return "React"
+	case project.Angular:
+		return "Angular"
 	case project.Static:
 		return "Estático"
 	}
@@ -204,10 +209,18 @@ func describe(o project.Options) [][2]string {
 			[2]string{"PHP", o.PHPVersion},
 			[2]string{"Pint", yesNo(o.Pint)},
 			[2]string{"assets do Vite", yesNo(o.ViteAssets)})
-	case project.React:
+	case project.Symfony:
+		pairs = append(pairs,
+			[2]string{"PHP", o.PHPVersion},
+			[2]string{"AssetMapper", yesNo(o.AssetMapper)},
+			[2]string{"assets com Node (Encore/Vite)", yesNo(o.ViteAssets)})
+	case project.React, project.Angular:
 		pairs = append(pairs,
 			[2]string{"Node", o.NodeVersion + " · " + o.PackageManager},
 			[2]string{"lint antes do build", yesNo(o.Lint)})
+		if o.Type == project.Angular {
+			pairs = append(pairs, [2]string{"pasta publicada", o.OutputDir})
+		}
 	case project.Static:
 		if o.MkDocs {
 			pairs = append(pairs, [2]string{"build", "mkdocs"})
@@ -253,7 +266,9 @@ func reviewOptions(env *Env, o *project.Options) error {
 func askOptions(env *Env, o *project.Options) error {
 	typeOpts := []huh.Option[string]{
 		huh.NewOption("Laravel", project.Laravel),
+		huh.NewOption("Symfony", project.Symfony),
 		huh.NewOption("React (Vite)", project.React),
+		huh.NewOption("Angular", project.Angular),
 		huh.NewOption("Estático (mkdocs ou pasta pronta)", project.Static),
 	}
 	if err := env.UI.Run(huh.NewGroup(
@@ -281,7 +296,16 @@ func askOptions(env *Env, o *project.Options) error {
 			huh.NewConfirm().Title("Buildar assets do Vite (public/build)?").
 				Description("Não, para APIs que só servem rotas.").Affirmative("Sim").Negative("Não").Value(&o.ViteAssets),
 		)
-	case project.React:
+	case project.Symfony:
+		fields = append(fields,
+			huh.NewInput().Title("Versão do PHP").Value(&o.PHPVersion),
+			huh.NewConfirm().Title("Compilar o AssetMapper (asset-map:compile)?").Affirmative("Sim").Negative("Não").Value(&o.AssetMapper),
+			huh.NewConfirm().Title("Buildar assets com Node (Encore/Vite: npm run build)?").Affirmative("Sim").Negative("Não").Value(&o.ViteAssets),
+		)
+	case project.React, project.Angular:
+		if o.Type == project.Angular {
+			fields = append(fields, huh.NewInput().Title("Pasta publicada (saída do ng build)").Value(&o.OutputDir))
+		}
 		fields = append(fields,
 			huh.NewSelect[string]().Title("Gerenciador de pacotes").
 				Options(huh.NewOption("pnpm", "pnpm"), huh.NewOption("npm", "npm")).Value(&o.PackageManager),
@@ -297,7 +321,7 @@ func askOptions(env *Env, o *project.Options) error {
 		}
 	}
 	vars := strings.Join(o.ViteVars, ", ")
-	if o.Type == project.React || (o.Type == project.Laravel && o.ViteAssets) {
+	if o.Type == project.React || ((o.Type == project.Laravel || o.Type == project.Symfony) && o.ViteAssets) {
 		fields = append(fields, huh.NewInput().Title("Variáveis do build (vars do repositório)").
 			Description("Separadas por vírgula. Detectadas no .env.example.").Value(&vars))
 	}

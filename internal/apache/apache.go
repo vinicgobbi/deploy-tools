@@ -80,7 +80,12 @@ var vhostTmpl = template.Must(template.New("vhost").Funcs(template.FuncMap{"join
     Options -Indexes +FollowSymLinks
     AllowOverride All
     Require all granted
-{{- if eq .Type "react"}}
+{{- if eq .Type "symfony"}}
+
+    # Rotas do Symfony sem depender do .htaccess (symfony/apache-pack)
+    FallbackResource /index.php
+{{- end}}
+{{- if or (eq .Type "react") (eq .Type "angular")}}
 
     RewriteEngine On
     RewriteBase /

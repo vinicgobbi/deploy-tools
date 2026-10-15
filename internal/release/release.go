@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/vinicgobbi/deploy-tools/internal/appconf"
@@ -98,13 +99,12 @@ func (m *Manager) Deploy(app, id string, tarball io.Reader) (err error) {
 		return fmt.Errorf("extracting tarball: %w", err)
 	}
 
-	if err := LinkShared(m.Paths.AppDir(app), target); err != nil {
-		return fmt.Errorf("linking shared/: %w", err)
-	}
-
 	conf, ok, err := appconf.Read(m.Paths.AppDir(app))
 	if err != nil {
 		return err
+	}
+	if err := LinkShared(m.Paths.AppDir(app), target, conf.Type); err != nil {
+		return fmt.Errorf("linking shared/: %w", err)
 	}
 	if ok {
 		if err := m.runHooks(conf, target); err != nil {
@@ -124,33 +124,88 @@ func (m *Manager) Deploy(app, id string, tarball io.Reader) (err error) {
 	return nil
 }
 
-// LaravelHooks are fixed: nothing shipped in the tarball is ever executed as
-// a script by this tool. (artisan itself is app code, which the web server
+// Hooks are the php commands run inside a new release, per type. They are
+// fixed: nothing shipped in the tarball is ever executed as a script by
+// this tool. (artisan and bin/console are app code, which the web server
 // would run anyway.)
-func LaravelHooks(c appconf.Conf) [][]string {
-	hooks := [][]string{
-		{"artisan", "storage:link"},
-		{"artisan", "config:cache"},
-		{"artisan", "route:cache"},
-		{"artisan", "view:cache"},
-	}
-	if c.LaravelMigrate {
-		hooks = append(hooks, []string{"artisan", "migrate", "--force"})
+func Hooks(c appconf.Conf) [][]string {
+	var hooks [][]string
+	switch c.Type {
+	case validate.Laravel:
+		hooks = [][]string{
+			{"artisan", "storage:link"},
+			{"artisan", "config:cache"},
+			{"artisan", "route:cache"},
+			{"artisan", "view:cache"},
+		}
+		if c.Migrate {
+			hooks = append(hooks, []string{"artisan", "migrate", "--force"})
+		}
+	case validate.Symfony:
+		// The cache lives in the release (var/cache), warmed for its path.
+		hooks = [][]string{{"bin/console", "cache:clear", "--env=prod", "--no-debug"}}
+		if c.Migrate {
+			hooks = append(hooks, []string{"bin/console", "doctrine:migrations:migrate",
+				"--no-interaction", "--allow-no-migration", "--env=prod", "--no-debug"})
+		}
 	}
 	return hooks
 }
 
-func (m *Manager) runHooks(c appconf.Conf, releaseDir string) error {
-	if c.Type != validate.Laravel {
-		return nil
+// MigrateCommand is the migrations hook of a PHP type, for messages.
+func MigrateCommand(typ string) string {
+	switch typ {
+	case validate.Laravel:
+		return "php artisan migrate --force"
+	case validate.Symfony:
+		return "php bin/console doctrine:migrations:migrate"
 	}
-	for _, args := range LaravelHooks(c) {
+	return ""
+}
+
+// EnvFile is the shared secrets file of a PHP type: Laravel reads .env;
+// Symfony ships .env with defaults and reads overrides from .env.local.
+func EnvFile(typ string) string {
+	if typ == validate.Symfony {
+		return ".env.local"
+	}
+	return ".env"
+}
+
+func (m *Manager) runHooks(c appconf.Conf, releaseDir string) error {
+	for _, args := range Hooks(c) {
 		cmd := run.Cmd{Dir: releaseDir, Name: "php", Args: args, Stdout: m.Err, Stderr: m.Err}
 		if err := m.Runner.Run(cmd); err != nil {
 			return fmt.Errorf("hook failed (%s): %w", cmd, err)
 		}
 	}
+	if c.Type == validate.Symfony {
+		// Apache (group www-data) writes cache pools at runtime.
+		return groupWritable(filepath.Join(releaseDir, "var", "cache"))
+	}
 	return nil
+}
+
+// groupWritable is chmod -R g+w without following symlinks; a missing
+// root is fine.
+func groupWritable(root string) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return os.Chmod(path, fi.Mode().Perm()|0o020)
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func (m *Manager) Rollback(app, id string) error {
@@ -268,10 +323,18 @@ func SwapCurrent(appDir, target string) error {
 	return nil
 }
 
+// NestedShared maps, per app type, a shared/ entry to the path inside the
+// release where it is linked (instead of the release root). Symfony keeps
+// only var/log across deploys: var/cache must belong to each release.
+var NestedShared = map[string]map[string]string{
+	validate.Symfony: {"var-log": "var/log"},
+}
+
 // LinkShared symlinks every entry of <appDir>/shared (dotfiles included, so
 // .env is covered) into releaseDir, replacing whatever the tarball shipped
-// in that slot (e.g. an empty storage/ stub from the git checkout).
-func LinkShared(appDir, releaseDir string) error {
+// in that slot (e.g. an empty storage/ stub from the git checkout). Entries
+// in NestedShared[typ] go to their nested path instead.
+func LinkShared(appDir, releaseDir, typ string) error {
 	entries, err := os.ReadDir(filepath.Join(appDir, "shared"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -280,11 +343,21 @@ func LinkShared(appDir, releaseDir string) error {
 		return err
 	}
 	for _, e := range entries {
-		dst := filepath.Join(releaseDir, e.Name())
+		rel := e.Name()
+		if nested, ok := NestedShared[typ][e.Name()]; ok {
+			rel = nested
+		}
+		dst := filepath.Join(releaseDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o775); err != nil {
+			return err
+		}
 		if err := os.RemoveAll(dst); err != nil {
 			return err
 		}
-		if err := os.Symlink(filepath.Join("..", "..", "shared", e.Name()), dst); err != nil {
+		// Relative, so it survives moving the app dir: one ".." per level
+		// of rel, plus releases/<id>.
+		up := strings.Repeat("../", strings.Count(rel, "/")+2)
+		if err := os.Symlink(up+"shared/"+e.Name(), dst); err != nil {
 			return err
 		}
 	}

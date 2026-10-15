@@ -22,7 +22,9 @@ import (
 func typeOptions() []huh.Option[string] {
 	return []huh.Option[string]{
 		huh.NewOption("Laravel   PHP; .env e storage/ são mantidos entre deploys", validate.Laravel),
+		huh.NewOption("Symfony   PHP; .env.local e var/log são mantidos entre deploys", validate.Symfony),
 		huh.NewOption("React     SPA buildada com Vite (dist/)", validate.React),
+		huh.NewOption("Angular   SPA buildada com o Angular CLI (dist/<projeto>/browser)", validate.Angular),
 		huh.NewOption("Estático  site já pronto, ex.: mkdocs ou HTML", validate.Static),
 	}
 }
@@ -73,8 +75,8 @@ func doCreate(env *Env, o provision.CreateOptions) error {
 	if info.CertFile == "" {
 		steps = append(steps, "O site está só em HTTP. Emita um certificado (ex.: certbot certonly --webroot) e rode `sudo deploy-tools app cert "+o.App+"`.")
 	}
-	if o.Type == validate.Laravel {
-		steps = append(steps, "Preencha "+filepath.Join(env.Paths.SharedDir(o.App), ".env")+".")
+	if validate.IsPHP(o.Type) {
+		steps = append(steps, "Preencha "+filepath.Join(env.Paths.SharedDir(o.App), release.EnvFile(o.Type))+".")
 	}
 	if !o.Enable {
 		steps = append(steps, "Coloque no ar: sudo deploy-tools app enable "+o.App)
@@ -99,8 +101,11 @@ func doMigrate(env *Env, o provision.MigrateOptions, yes bool) error {
 		[2]string{"DocumentRoot", pl.OldDocRoot + "  →  " + pl.NewDocRoot},
 		[2]string{"release", "releases/" + pl.ReleaseID + "  (o conteúdo atual)"},
 	)
-	if o.Type == validate.Laravel {
+	switch o.Type {
+	case validate.Laravel:
 		env.UI.KV([2]string{"shared/", ".env e storage/ saem da release e viram symlinks"})
+	case validate.Symfony:
+		env.UI.KV([2]string{"shared/", ".env.local e var/log saem da release e viram symlinks"})
 	}
 	env.UI.Hint("O Apache é recarregado depois de validar a config; se ela tiver erro, nada muda.")
 	env.UI.Println()
@@ -313,18 +318,22 @@ func doConfig(env *Env, app, typ string, migrate *bool) error {
 		return err
 	}
 	if migrate != nil {
-		c.LaravelMigrate = *migrate
-	} else if c.Type == validate.Laravel && env.UI.Interactive {
-		if c.LaravelMigrate, err = env.UI.Confirm("Rodar php artisan migrate --force a cada deploy?", ""); err != nil {
+		c.Migrate = *migrate
+	} else if validate.IsPHP(c.Type) && env.UI.Interactive {
+		if c.Migrate, err = env.UI.Confirm("Rodar "+release.MigrateCommand(c.Type)+" a cada deploy?", ""); err != nil {
 			return err
 		}
 	}
 	if err := env.P.Configure(app, c); err != nil {
 		return err
 	}
-	if c.Type == validate.Laravel {
+	switch c.Type {
+	case validate.Laravel:
 		env.UI.Println("Próximos deploys rodam storage:link, config:cache, route:cache, view:cache" +
-			map[bool]string{true: " e migrate --force.", false: "."}[c.LaravelMigrate])
+			map[bool]string{true: " e migrate --force.", false: "."}[c.Migrate])
+	case validate.Symfony:
+		env.UI.Println("Próximos deploys rodam cache:clear --env=prod" +
+			map[bool]string{true: " e doctrine:migrations:migrate.", false: "."}[c.Migrate])
 	}
 	return nil
 }

@@ -97,14 +97,14 @@ informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <a
 			return doCreate(env, create)
 		},
 	}
-	createCmd.Flags().StringVarP(&create.Type, "type", "t", "", "laravel | react | static")
+	createCmd.Flags().StringVarP(&create.Type, "type", "t", "", "laravel | symfony | react | angular | static")
 	createCmd.Flags().StringSliceVarP(&create.Domains, "domain", "d", nil,
 		"domínio; repita ou separe por vírgula para vários, o 1º é o principal (padrão: <sub>.<domínio coringa>)")
 	createCmd.Flags().StringVar(&create.Base, "base", "", "domínio coringa cadastrado a usar (server domain list)")
 	createCmd.Flags().StringVar(&create.Sub, "sub", "", "subdomínio no --base (padrão: o nome do app)")
 	createCmd.MarkFlagsMutuallyExclusive("domain", "base")
 	certFlags(createCmd, &create.Cert)
-	createCmd.Flags().BoolVar(&create.MigrateOnDeploy, "migrate-on-deploy", false, "laravel: roda php artisan migrate --force a cada deploy")
+	createCmd.Flags().BoolVar(&create.MigrateOnDeploy, "migrate-on-deploy", false, "laravel/symfony: roda as migrations a cada deploy")
 	createCmd.Flags().BoolVar(&create.Enable, "enable", false, "ativa o vhost e recarrega o Apache (com configtest)")
 	_ = createCmd.RegisterFlagCompletionFunc("type", completeTypes)
 
@@ -115,7 +115,7 @@ informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <a
 		Short: "Converte um app já em produção para releases/current, sem downtime",
 		Long: `Para apps que hoje servem direto de /var/www/<app> (diretório comum).
 O conteúdo atual vira releases/<timestamp>-pre-migracao, .env e storage/
-(Laravel) vão para shared/, e o vhost é repontado para current com
+(Laravel), ou .env.local e var/log (Symfony), vão para shared/, e o vhost é repontado para current com
 configtest antes do reload. O site continua no ar o tempo todo.`,
 		Example: `  sudo deploy-tools app migrate docs --type static
   sudo deploy-tools app migrate sistema --type laravel --vhost /etc/apache2/sites-available/sistema-ssl.conf`,
@@ -135,9 +135,9 @@ configtest antes do reload. O site continua no ar o tempo todo.`,
 			return doMigrate(env, mig, migYes)
 		},
 	}
-	migrateCmd.Flags().StringVarP(&mig.Type, "type", "t", "", "laravel | react | static")
+	migrateCmd.Flags().StringVarP(&mig.Type, "type", "t", "", "laravel | symfony | react | angular | static")
 	migrateCmd.Flags().StringVar(&mig.Vhost, "vhost", "", "vhost a editar (padrão: detectado em sites-enabled)")
-	migrateCmd.Flags().BoolVar(&mig.MigrateOnDeploy, "migrate-on-deploy", false, "laravel: roda php artisan migrate --force a cada deploy")
+	migrateCmd.Flags().BoolVar(&mig.MigrateOnDeploy, "migrate-on-deploy", false, "laravel/symfony: roda as migrations a cada deploy")
 	migrateCmd.Flags().BoolVarP(&migYes, "yes", "y", false, "não pede confirmação")
 	_ = migrateCmd.RegisterFlagCompletionFunc("type", completeTypes)
 
@@ -220,7 +220,8 @@ configtest antes e depois, reload só se passar e, em caso de falha, o site
 		Long: `Apps criados antes do deploy-tools em Go não têm .deploy.conf e fazem
 deploy sem hooks (como sempre fizeram). Este comando grava a config;
 para Laravel, os próximos deploys passam a rodar storage:link,
-config:cache, route:cache e view:cache (e migrate --force, se ligado).
+config:cache, route:cache e view:cache (e migrate --force, se ligado); para
+Symfony, cache:clear (e doctrine:migrations:migrate, se ligado).
 Sem --type, o tipo é detectado a partir de current/.`,
 		Example: `  sudo deploy-tools app config sistema --type laravel --migrate-on-deploy
   sudo deploy-tools app config docs`,
@@ -245,9 +246,9 @@ Sem --type, o tipo é detectado a partir de current/.`,
 			return doConfig(env, a, cfgType, migrate)
 		},
 	}
-	configCmd.Flags().StringVarP(&cfgType, "type", "t", "", "laravel | react | static (padrão: detectar)")
-	configCmd.Flags().BoolVar(&cfgMigrate, "migrate-on-deploy", false, "laravel: liga migrate --force no deploy")
-	configCmd.Flags().BoolVar(&cfgNoMigrate, "no-migrate-on-deploy", false, "laravel: desliga migrate --force no deploy")
+	configCmd.Flags().StringVarP(&cfgType, "type", "t", "", "laravel | symfony | react | angular | static (padrão: detectar)")
+	configCmd.Flags().BoolVar(&cfgMigrate, "migrate-on-deploy", false, "laravel/symfony: liga as migrations no deploy")
+	configCmd.Flags().BoolVar(&cfgNoMigrate, "no-migrate-on-deploy", false, "laravel/symfony: desliga as migrations no deploy")
 	configCmd.MarkFlagsMutuallyExclusive("migrate-on-deploy", "no-migrate-on-deploy")
 	_ = configCmd.RegisterFlagCompletionFunc("type", completeTypes)
 
@@ -402,7 +403,7 @@ com --key, autoriza a chave da CI. Idempotente: pode rodar de novo.`,
 			steps = append(steps,
 				"Configure os secrets no GitHub (veja abaixo; de novo a qualquer hora: deploy-tools key secrets).",
 				"Cadastre os domínios coringa dos apps: sudo deploy-tools server domain add <domínio>.",
-				"Crie os apps: sudo deploy-tools app create <app> --type laravel|react|static",
+				"Crie os apps: sudo deploy-tools app create <app> --type laravel|symfony|react|angular|static",
 			)
 			env.UI.Steps("Próximos passos", steps...)
 			env.UI.Println()

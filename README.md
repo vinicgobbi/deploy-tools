@@ -35,8 +35,8 @@ São dois binários Go:
   [deploy-dev](#deploy-dev-configurar-o-deploy-de-um-projeto)).
 
 Requisitos do servidor: Debian ou Ubuntu com Apache 2.4 (`a2ensite`,
-`apache2ctl`, `sites-available/`), `mod_ssl` e, para Laravel, PHP via
-mod_php.
+`apache2ctl`, `sites-available/`), `mod_ssl` e, para Laravel e Symfony, PHP
+via mod_php.
 
 ## Setup de um servidor
 
@@ -239,7 +239,7 @@ qualquer chave sem `command=`.
 
 ```
 deploy-tools                                    # interface de tela cheia
-deploy-tools app create <app> --type laravel|react|static [-d dominio]... | [--base b [--sub s]] [--cert c --key k [--chain b]] [--migrate-on-deploy] [--enable]
+deploy-tools app create <app> --type laravel|symfony|react|angular|static [-d dominio]... | [--base b [--sub s]] [--cert c --key k [--chain b]] [--migrate-on-deploy] [--enable]
 deploy-tools app migrate <app> --type ... [--vhost arquivo] [--yes]
 deploy-tools app config <app> [--type t] [--migrate-on-deploy | --no-migrate-on-deploy]
 deploy-tools app domain list|add|remove <app> [dominio]...
@@ -307,13 +307,13 @@ sequência:
 O `app create --enable` e o `app migrate` também recusam começar se a config
 atual do Apache já estiver com erro.
 
-| | Laravel | React | Static |
-|---|---|---|---|
-| `DocumentRoot` | `current/public` (PHP via mod_php, sem FPM) | `current` | `current` |
-| Build esperado no tarball | checkout com `vendor/` já instalado | conteúdo de `dist/` (Vite) | qualquer site já buildado (ex.: mkdocs `site/`) |
-| Rotas | `.htaccess` do próprio Laravel | `RewriteRule` de SPA no vhost (react-router funciona em refresh direto) | nenhuma regra especial |
-| `shared/` | `.env` (vazio, você preenche) + `storage/` | não usa | não usa |
-| Hooks no deploy | `storage:link`, `config:cache`, `route:cache`, `view:cache` (+ `migrate --force` opcional) | nenhum | nenhum |
+| | Laravel | Symfony | React / Angular | Static |
+|---|---|---|---|---|
+| `DocumentRoot` | `current/public` (PHP via mod_php, sem FPM) | `current/public` (PHP via mod_php) | `current` | `current` |
+| Build esperado no tarball | checkout com `vendor/` já instalado | checkout com `vendor/` (sem dev) e assets públicos já gerados; sem `var/` | conteúdo de `dist/` (Vite) ou da saída do `ng build` | qualquer site já buildado (ex.: mkdocs `site/`) |
+| Rotas | `.htaccess` do próprio Laravel | `FallbackResource /index.php` no vhost (não depende do `apache-pack`) | `RewriteRule` de SPA no vhost (o roteador do front funciona em refresh direto) | nenhuma regra especial |
+| `shared/` | `.env` (vazio, você preenche) + `storage/` | `.env.local` (criado com `APP_ENV=prod`) + `var/log` | não usa | não usa |
+| Hooks no deploy | `storage:link`, `config:cache`, `route:cache`, `view:cache` (+ `migrate --force` opcional) | `cache:clear --env=prod` (+ `doctrine:migrations:migrate` opcional) | nenhum | nenhum |
 
 ## Migrar um app que já está em produção (`app migrate`)
 
@@ -339,33 +339,46 @@ confirmação. A migração **não derruba o site**:
    milissegundos:
    - o conteúdo vira `releases/<timestamp>-pre-migracao/`;
    - para Laravel, `.env` e `storage/` vão para `shared/` e voltam como
-     symlink.
+     symlink;
+   - para Symfony, o mesmo acontece com `.env.local` e `var/log`.
 5. Grava o `.deploy.conf`.
 
 O vhost é detectado em `sites-enabled/` pelo `DocumentRoot`. Se houver mais de
 um, ou nenhum, indique o arquivo com `--vhost`. A partir daí, o próximo push
 já cria a release seguinte normalmente.
 
-## `.deploy.conf` e hooks de Laravel
+## `.deploy.conf` e hooks de PHP
 
 `/var/www/<app>/.deploy.conf` é um arquivo `KEY=value` gravado pelo
 `app create`, `app migrate` e `app config`:
 
 ```
 TYPE=laravel
-LARAVEL_MIGRATE=no
+MIGRATE=no
 ```
 
-Com `TYPE=laravel`, todo deploy roda dentro da release nova, **antes** de
-trocar o `current`:
+O `LARAVEL_MIGRATE` das versões anteriores continua sendo lido. Em apps
+PHP, todo deploy roda os hooks dentro da release nova, **antes** de trocar o
+`current`. Com `TYPE=laravel`:
 
 ```
 php artisan storage:link
 php artisan config:cache
 php artisan route:cache
 php artisan view:cache
-php artisan migrate --force      # só com LARAVEL_MIGRATE=yes
+php artisan migrate --force      # só com MIGRATE=yes
 ```
+
+Com `TYPE=symfony`:
+
+```
+php bin/console cache:clear --env=prod --no-debug
+php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --env=prod --no-debug   # só com MIGRATE=yes
+```
+
+No Symfony, o cache (`var/cache`) é de cada release: é gerado no caminho
+dela e depois liberado para escrita do grupo `www-data`, porque o Apache
+grava os cache pools em tempo de execução. Só o `var/log` é compartilhado.
 
 Se qualquer hook falhar, a release nova é apagada e o `current` continua na
 anterior, ou seja, o site não muda. O mesmo vale para um tarball corrompido.
@@ -374,17 +387,18 @@ Os comandos são fixos no binário: nada do tarball é executado como script.
 Para apps sem `.deploy.conf` (por exemplo, migrados), ligue os hooks com:
 
 ```bash
-sudo deploy-tools app config sistema --type laravel     # sem --type: detecta pelo current/
+sudo deploy-tools app config sistema --type laravel     # ou symfony; sem --type: detecta pelo current/
 sudo deploy-tools app config sistema --migrate-on-deploy
 ```
 
 ## Por que existe `shared/`
 
 Cada deploy é uma pasta nova em `releases/`. Para Laravel, isso apagaria
-`.env` e `storage/` (uploads, sessions, cache, logs) a cada deploy. Para
-evitar isso, tudo o que está em `/var/www/<app>/shared/` é symlinkado para
-dentro da release recém-extraída, dotfiles incluídos, antes de trocar o
-`current`.
+`.env` e `storage/` (uploads, sessions, cache, logs) a cada deploy; para
+Symfony, o `.env.local` e os logs. Para evitar isso, tudo o que está em
+`/var/www/<app>/shared/` é symlinkado para dentro da release recém-extraída,
+dotfiles incluídos, antes de trocar o `current`. No Symfony, `shared/var-log`
+vira `var/log` dentro da release.
 
 Edite e faça upload só dentro de `shared/`, nunca dentro de uma
 `releases/<id>/`. Elas são descartáveis e somem na poda.
@@ -480,8 +494,16 @@ deploy-dev check         # valida os workflows (sai com código 1 se houver erro
 
 O `init` detecta:
 
-- **Tipo:** `artisan` indica Laravel, Vite/React indica React e `mkdocs.yml`
+- **Tipo:** `artisan` indica Laravel; `bin/console` com
+  `symfony/framework-bundle` no `composer.json` indica Symfony;
+  `angular.json` indica Angular; Vite/React indica React; e `mkdocs.yml`
   indica estático com mkdocs. Qualquer outro caso vira uma pasta pronta.
+- **Angular:** a pasta publicada vem do `angular.json` (o `outputPath` do
+  projeto, mais `browser/` no builder `application` do Angular 17+).
+- **Symfony:** AssetMapper (`symfony/asset-mapper`, compila com
+  `asset-map:compile`) e build Node (Encore/Vite, quando há script `build`).
+  O `assets:install` sempre roda. O `var/` e o `.env.local` ficam fora do
+  pacote, e o `.env` (os padrões do Symfony) vai junto.
 - **Commitizen:** presença de `cz.toml`, `.cz.toml` ou `[tool.commitizen]`
   no `pyproject.toml`.
 - **Node:** pnpm ou npm, lint, os `VITE_*` do `.env.example` e o registry npm

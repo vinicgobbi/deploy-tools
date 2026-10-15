@@ -64,7 +64,7 @@ func TestCreate(t *testing.T) {
 				t.Fatalf("releases dir: %v %v", fi, err)
 			}
 			c, ok, err := appconf.Read(p.Paths.AppDir("app"))
-			if err != nil || !ok || c.Type != typ || c.LaravelMigrate != (typ == "laravel") {
+			if err != nil || !ok || c.Type != typ || c.Migrate != (typ == "laravel") {
 				t.Fatalf("conf = %+v %v %v", c, ok, err)
 			}
 			vhost := read(t, p.Paths.VhostFile("app"))
@@ -434,5 +434,41 @@ func TestInstallReplacesBashWrapper(t *testing.T) {
 	}
 	if fi, _ := os.Stat(p.Paths.BinaryPath()); fi.Mode().Perm() != 0o755 {
 		t.Fatalf("mode = %v", fi.Mode())
+	}
+}
+
+func TestCreateSymfony(t *testing.T) {
+	p, _ := newP(t)
+	if err := p.Create(CreateOptions{App: "loja", Type: "symfony", MigrateOnDeploy: true}); err != nil {
+		t.Fatal(err)
+	}
+	sh := p.Paths.SharedDir("loja")
+	if got := read(t, filepath.Join(sh, ".env.local")); got != "APP_ENV=prod\nAPP_DEBUG=0\n" {
+		t.Fatalf(".env.local = %q", got)
+	}
+	if fi, err := os.Stat(filepath.Join(sh, "var-log")); err != nil || !fi.IsDir() {
+		t.Fatalf("shared/var-log: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sh, ".env")); !os.IsNotExist(err) {
+		t.Fatal("Symfony must not get a shared .env (it ships its own defaults)")
+	}
+	vhost := read(t, p.Paths.VhostFile("loja"))
+	if !strings.Contains(vhost, "DocumentRoot "+filepath.Join(p.Paths.CurrentLink("loja"), "public")) ||
+		!strings.Contains(vhost, "FallbackResource /index.php") {
+		t.Fatalf("vhost:\n%s", vhost)
+	}
+	if c, ok, err := appconf.Read(p.Paths.AppDir("loja")); err != nil || !ok || c.Type != "symfony" || !c.Migrate {
+		t.Fatalf("conf = %+v %v %v", c, ok, err)
+	}
+}
+
+func TestCreateAngularIsSPA(t *testing.T) {
+	p, _ := newP(t)
+	if err := p.Create(CreateOptions{App: "painel", Type: "angular"}); err != nil {
+		t.Fatal(err)
+	}
+	vhost := read(t, p.Paths.VhostFile("painel"))
+	if !strings.Contains(vhost, "RewriteRule ^ index.html [L]") || strings.Contains(vhost, "/public") {
+		t.Fatalf("vhost:\n%s", vhost)
 	}
 }

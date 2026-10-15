@@ -40,8 +40,12 @@ func typeName(t string) string {
 	switch t {
 	case validate.Laravel:
 		return "Laravel"
+	case validate.Symfony:
+		return "Symfony"
 	case validate.React:
 		return "React"
+	case validate.Angular:
+		return "Angular"
 	case validate.Static:
 		return "Estático"
 	}
@@ -155,8 +159,8 @@ func printAppCard(env *Env, info provision.AppInfo) {
 	deploy := "sem .deploy.conf — o deploy só troca os arquivos (sem hooks)"
 	if info.Conf != nil {
 		deploy = typeName(info.Conf.Type)
-		if info.Conf.Type == validate.Laravel {
-			deploy += " · migrations a cada deploy: " + yesNo(info.Conf.LaravelMigrate)
+		if validate.IsPHP(info.Conf.Type) {
+			deploy += " · migrations a cada deploy: " + yesNo(info.Conf.Migrate)
 		}
 	}
 	pairs = append(pairs, [2]string{"tipo", deploy})

@@ -49,7 +49,7 @@ jobs:
         with:
           fetch-depth: 0
 [[- end]]
-[[- if eq .Type "laravel"]]
+[[- if .IsPHP]]
 
       - uses: [[.Pin.SetupPHP]]
         with:
@@ -59,7 +59,7 @@ jobs:
       # O servidor tem as extensões de produção; o runner só precisa
       # validar e montar o vendor/, sem executar a aplicação.
       - name: Install dependencies
-        run: composer install --no-interaction --no-progress --prefer-dist --ignore-platform-req='ext-*'
+        run: composer install --no-interaction --no-progress --prefer-dist --ignore-platform-req='ext-*'[[if eq .Type "symfony"]] --no-scripts[[end]]
 [[- if .PHPDirs]]
 
       - name: Check PHP syntax
@@ -95,7 +95,7 @@ jobs:
 
       - name: Install Node dependencies
         run: [[.NodeInstall]]
-[[- if and .Lint (eq .Type "react")]]
+[[- if and .Lint .IsSPA]]
 
       - name: Lint
         run: [[.NodeRun]] lint
@@ -163,19 +163,37 @@ jobs:
         run: [[.BuildCommand]]
 [[- end]]
 [[- end]]
-[[- if eq .Type "laravel"]]
+[[- if .IsPHP]]
 
       # Reaproveita o vendor/ já baixado: remove os pacotes de dev e
       # regenera o autoload otimizado.
       - name: Prune dev dependencies
+[[- if eq .Type "symfony"]]
+        env:
+          APP_ENV: prod
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --no-scripts --ignore-platform-req='ext-*'
+
+      # O cache (var/cache) é gerado no servidor, no caminho da release; aqui
+      # só os arquivos públicos dos bundles[[if .AssetMapper]] e o AssetMapper[[end]].
+      - name: Build public assets
+        env:
+          APP_ENV: prod
+          APP_DEBUG: "0"
+        run: |
+          php bin/console assets:install public --no-interaction
+[[- if .AssetMapper]]
+          php bin/console asset-map:compile
+[[- end]]
+[[- else]]
         run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --ignore-platform-req='ext-*'
+[[- end]]
 [[- end]]
 
       - name: Package release
-[[- if eq .Type "laravel"]]
+[[- if .IsPHP]]
         run: |
           tar -czf "$RUNNER_TEMP/release.tar.gz" \
-[[- range .LaravelExcludes]]
+[[- range .PHPExcludes]]
             --exclude='[[.]]' \
 [[- end]]
             .
@@ -205,7 +223,9 @@ type tmplData struct {
 	DeployToolsRepo string
 }
 
-func (d tmplData) NeedsNode() bool  { return d.Type == React || (d.Type == Laravel && d.ViteAssets) }
+func (d tmplData) IsPHP() bool      { return d.Type == Laravel || d.Type == Symfony }
+func (d tmplData) IsSPA() bool      { return d.Type == React || d.Type == Angular }
+func (d tmplData) NeedsNode() bool  { return d.IsSPA() || (d.IsPHP() && d.ViteAssets) }
 func (d tmplData) BuildsVite() bool { return d.NeedsNode() }
 
 func (d tmplData) NodeInstall() string {
@@ -222,17 +242,26 @@ func (d tmplData) NodeRun() string {
 	return "npm run"
 }
 
-// LaravelExcludes keeps dev-only files out of the release. Node files go
-// too unless the app ships Vite assets (public/build is kept either way).
-func (d tmplData) LaravelExcludes() []string {
-	ex := []string{
-		"./.git", "./.github", "./tests", "./node_modules",
-		"./.env", "./.env.*", "./phpunit.xml", "./cz.toml", "./.cz.toml", "./body.md",
-		"./*.code-workspace",
+// PHPExcludes keeps dev-only files out of the release. Node files go too
+// unless the app ships built front assets (public/build, public/assets).
+func (d tmplData) PHPExcludes() []string {
+	ex := []string{"./.git", "./.github", "./tests", "./node_modules"}
+	switch d.Type {
+	case Symfony:
+		// .env (defaults) is part of the app; only the local overrides stay
+		// out. var/ is rebuilt on the server.
+		ex = append(ex, "./var", "./.env.local", "./.env.*.local", "./.env.test",
+			"./phpunit.xml", "./phpunit.xml.dist", "./phpunit.dist.xml", "./.php-cs-fixer.cache")
+	default:
+		ex = append(ex, "./.env", "./.env.*", "./phpunit.xml")
 	}
+	ex = append(ex, "./cz.toml", "./.cz.toml", "./body.md", "./*.code-workspace")
 	if !d.ViteAssets {
 		ex = append(ex, "./package.json", "./package-lock.json", "./pnpm-lock.yaml",
 			"./pnpm-workspace.yaml", "./vite.config.js", "./vite.config.ts")
+		if d.Type == Symfony {
+			ex = append(ex, "./webpack.config.js")
+		}
 	}
 	return ex
 }
@@ -244,13 +273,13 @@ func (o Options) Validate() error {
 	switch {
 	case !appRe.MatchString(o.App):
 		return fmt.Errorf("nome do app inválido: %q (use só letras, números, - e _)", o.App)
-	case o.Type != Laravel && o.Type != React && o.Type != Static:
+	case o.Type != Laravel && o.Type != Symfony && o.Type != React && o.Type != Angular && o.Type != Static:
 		return fmt.Errorf("tipo inválido: %q", o.Type)
 	case o.Branch == "":
 		return errors.New("branch não informado")
 	case !shaRe.MatchString(o.ActionRef):
 		return fmt.Errorf("ref da action de deploy inválido: %q (precisa ser um SHA completo)", o.ActionRef)
-	case o.Type != Laravel && o.OutputDir == "":
+	case o.Type != Laravel && o.Type != Symfony && o.OutputDir == "":
 		return errors.New("diretório de saída do build não informado")
 	case o.PackageManager != "pnpm" && o.PackageManager != "npm":
 		return fmt.Errorf("gerenciador de pacotes inválido: %q", o.PackageManager)

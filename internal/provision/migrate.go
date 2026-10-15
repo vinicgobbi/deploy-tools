@@ -152,10 +152,13 @@ func (p *Provisioner) Migrate(pl *MigratePlan) error {
 	if err := p.Owner.Chown(root, p.Paths.DeployUser, p.Paths.WebGroup, true); err != nil {
 		return fmt.Errorf("chown: %w", err)
 	}
-	if pl.Opts.Type == validate.Laravel {
+	if writable := map[string][]string{
+		validate.Laravel: {"storage", "bootstrap/cache"},
+		validate.Symfony: {"var"},
+	}[pl.Opts.Type]; len(writable) > 0 {
 		// Apache (www-data) writes here; after the chown it is only the
 		// group, so the group needs write access.
-		for _, d := range []string{"storage", "bootstrap/cache"} {
+		for _, d := range writable {
 			if err := groupWritable(filepath.Join(root, d)); err != nil {
 				return err
 			}
@@ -169,7 +172,7 @@ func (p *Provisioner) Migrate(pl *MigratePlan) error {
 	}
 
 	if err := appconf.Write(root, appconf.Conf{
-		Type: pl.Opts.Type, LaravelMigrate: pl.Opts.MigrateOnDeploy && pl.Opts.Type == validate.Laravel,
+		Type: pl.Opts.Type, Migrate: pl.Opts.MigrateOnDeploy && validate.IsPHP(pl.Opts.Type),
 	}); err != nil {
 		return err
 	}
@@ -209,9 +212,13 @@ func (p *Provisioner) restructure(pl *MigratePlan, staging string) (err error) {
 	}
 	undo = append(undo, func() { _ = os.Symlink(".", filepath.Join(rel, "current")) })
 
-	if pl.Opts.Type == validate.Laravel {
-		for _, name := range []string{".env", "storage"} {
-			src, dst := filepath.Join(rel, name), filepath.Join(shared, name)
+	moves := map[string][][2]string{ // release path -> shared/ entry
+		validate.Laravel: {{".env", ".env"}, {"storage", "storage"}},
+		validate.Symfony: {{".env.local", ".env.local"}, {"var/log", "var-log"}},
+	}[pl.Opts.Type]
+	if len(moves) > 0 {
+		for _, mv := range moves {
+			src, dst := filepath.Join(rel, mv[0]), filepath.Join(shared, mv[1])
 			if !exists(src) {
 				continue
 			}
@@ -220,11 +227,11 @@ func (p *Provisioner) restructure(pl *MigratePlan, staging string) (err error) {
 			}
 			undo = append(undo, func() { _ = os.Remove(src); _ = os.Rename(dst, src) })
 		}
-		if err := p.emptyEnv(filepath.Join(shared, ".env")); err != nil {
+		if err := p.emptyEnv(filepath.Join(shared, release.EnvFile(pl.Opts.Type))); err != nil {
 			return err
 		}
 	}
-	if err := release.LinkShared(staging, rel); err != nil {
+	if err := release.LinkShared(staging, rel, pl.Opts.Type); err != nil {
 		return err
 	}
 	if err := os.Symlink(finalRelease, filepath.Join(staging, "current")); err != nil {
@@ -246,8 +253,9 @@ func (pl *MigratePlan) Warnings() []string {
 				"Rode como deploy: cd "+filepath.Join(pl.Root, "current")+" && php artisan config:cache")
 		}
 	}
-	if pl.Opts.Type == validate.Laravel && !strings.HasSuffix(pl.OldDocRoot, "/public") {
-		w = append(w, "O DocumentRoot antigo não terminava em /public, o que é incomum para Laravel. Confira o tipo.")
+	if validate.IsPHP(pl.Opts.Type) && !strings.HasSuffix(pl.OldDocRoot, "/public") {
+		w = append(w, "O DocumentRoot antigo não terminava em /public, o que é incomum para "+
+			map[string]string{validate.Laravel: "Laravel", validate.Symfony: "Symfony"}[pl.Opts.Type]+". Confira o tipo.")
 	}
 	return w
 }

@@ -23,8 +23,8 @@ import (
 const FileName = ".deploy.conf"
 
 type Conf struct {
-	Type           string // laravel | react | static
-	LaravelMigrate bool   // run `php artisan migrate --force` on deploy
+	Type    string // laravel | symfony | react | angular | static
+	Migrate bool   // PHP apps: run the database migrations on deploy
 }
 
 func Path(appDir string) string { return filepath.Join(appDir, FileName) }
@@ -57,14 +57,14 @@ func Read(appDir string) (c Conf, ok bool, err error) {
 				return Conf{}, false, fmt.Errorf("%s:%d: %w", FileName, n, err)
 			}
 			c.Type = val
-		case "LARAVEL_MIGRATE":
+		case "MIGRATE", "LARAVEL_MIGRATE": // LARAVEL_MIGRATE: written up to v0.2
 			switch val {
 			case "yes":
-				c.LaravelMigrate = true
+				c.Migrate = true
 			case "no", "":
-				c.LaravelMigrate = false
+				c.Migrate = false
 			default:
-				return Conf{}, false, fmt.Errorf("%s:%d: LARAVEL_MIGRATE must be yes or no", FileName, n)
+				return Conf{}, false, fmt.Errorf("%s:%d: %s must be yes or no", FileName, n, key)
 			}
 		default:
 			return Conf{}, false, fmt.Errorf("%s:%d: unknown key %q", FileName, n, key)
@@ -82,12 +82,12 @@ func Write(appDir string, c Conf) error {
 		return err
 	}
 	migrate := "no"
-	if c.LaravelMigrate {
+	if c.Migrate {
 		migrate = "yes"
 	}
 	body := "# Gerado por deploy-tools. Edite com: deploy-tools app config <app>\n" +
 		"TYPE=" + c.Type + "\n" +
-		"LARAVEL_MIGRATE=" + migrate + "\n"
+		"MIGRATE=" + migrate + "\n"
 
 	tmp := Path(appDir) + ".tmp"
 	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
@@ -105,9 +105,17 @@ func DetectType(releaseDir string) string {
 		_, err := os.Stat(filepath.Join(releaseDir, name))
 		return err == nil
 	}
+	globs := func(pattern string) bool {
+		m, _ := filepath.Glob(filepath.Join(releaseDir, pattern))
+		return len(m) > 0
+	}
 	switch {
 	case exists("artisan"):
 		return validate.Laravel
+	case exists("bin/console") && exists("public/index.php"):
+		return validate.Symfony
+	case exists("index.html") && globs("main*.js") && globs("polyfills*.js"):
+		return validate.Angular
 	case exists("index.html") && exists("assets"):
 		return validate.React
 	default:

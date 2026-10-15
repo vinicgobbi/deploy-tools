@@ -68,7 +68,13 @@ func TestHooks(t *testing.T) {
 		{"static", &appconf.Conf{Type: "static"}, nil},
 		{"react", &appconf.Conf{Type: "react"}, nil},
 		{"laravel", &appconf.Conf{Type: "laravel"}, base},
-		{"laravel+migrate", &appconf.Conf{Type: "laravel", LaravelMigrate: true}, append(base, "php artisan migrate --force")},
+		{"laravel+migrate", &appconf.Conf{Type: "laravel", Migrate: true}, append(base, "php artisan migrate --force")},
+		{"angular", &appconf.Conf{Type: "angular"}, nil},
+		{"symfony", &appconf.Conf{Type: "symfony"}, []string{"php bin/console cache:clear --env=prod --no-debug"}},
+		{"symfony+migrate", &appconf.Conf{Type: "symfony", Migrate: true}, []string{
+			"php bin/console cache:clear --env=prod --no-debug",
+			"php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --env=prod --no-debug",
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -89,7 +95,7 @@ func TestHooks(t *testing.T) {
 }
 
 func TestFailingHookAbortsBeforeSwap(t *testing.T) {
-	m, f := setup(t, &appconf.Conf{Type: "laravel", LaravelMigrate: true})
+	m, f := setup(t, &appconf.Conf{Type: "laravel", Migrate: true})
 	if err := m.Deploy("api", "1", bytes.NewReader(site(t))); err != nil {
 		t.Fatal(err)
 	}
@@ -158,5 +164,31 @@ func TestLinkSharedIncludesDotfiles(t *testing.T) {
 	link, _ := os.Readlink(filepath.Join(m.Paths.ReleasesDir("api"), "1", "storage"))
 	if link != "../../shared/storage" {
 		t.Fatalf("storage link = %q", link)
+	}
+}
+
+func TestSymfonySharesOnlyVarLog(t *testing.T) {
+	m, _ := setup(t, &appconf.Conf{Type: "symfony"})
+	sh := m.Paths.SharedDir("api")
+	_ = os.MkdirAll(filepath.Join(sh, "var-log"), 0o775)
+	_ = os.WriteFile(filepath.Join(sh, ".env.local"), []byte("APP_ENV=prod\n"), 0o640)
+	if err := m.Deploy("api", "1", bytes.NewReader(site(t))); err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join(m.Paths.ReleasesDir("api"), "1")
+	if got, _ := os.Readlink(filepath.Join(rel, "var", "log")); got != "../../../shared/var-log" {
+		t.Fatalf("var/log -> %q", got)
+	}
+	if fi, err := os.Stat(filepath.Join(rel, "var", "log")); err != nil || !fi.IsDir() {
+		t.Fatalf("var/log does not resolve: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(rel, "var-log")); !os.IsNotExist(err) {
+		t.Fatal("var-log also linked at the release root")
+	}
+	if got, _ := os.Readlink(filepath.Join(rel, ".env.local")); got != "../../shared/.env.local" {
+		t.Fatalf(".env.local -> %q", got)
+	}
+	if fi, err := os.Lstat(filepath.Join(rel, "var")); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("var/ must be a real directory of the release (cache stays per release)")
 	}
 }

@@ -121,8 +121,22 @@ func (p *Provisioner) Create(o CreateOptions) error {
 		docRoot = filepath.Join(docRoot, "public")
 		dirRoot = docRoot
 	}
+	if o.Type == validate.Symfony {
+		// .env.local overrides the committed .env; var/log is the only
+		// part of var/ kept across deploys (see release.NestedShared).
+		sh := p.Paths.SharedDir(o.App)
+		if err := p.mkdirShared(filepath.Join(sh, "var-log")); err != nil {
+			return err
+		}
+		if err := p.envFile(filepath.Join(sh, ".env.local"), "APP_ENV=prod\nAPP_DEBUG=0\n"); err != nil {
+			return err
+		}
+		p.say("Criado %s com APP_ENV=prod — complete (APP_SECRET, DATABASE_URL...) antes do primeiro deploy.", filepath.Join(sh, ".env.local"))
+		docRoot = filepath.Join(docRoot, "public")
+		dirRoot = docRoot
+	}
 
-	if err := appconf.Write(appDir, appconf.Conf{Type: o.Type, LaravelMigrate: o.MigrateOnDeploy && o.Type == validate.Laravel}); err != nil {
+	if err := appconf.Write(appDir, appconf.Conf{Type: o.Type, Migrate: o.MigrateOnDeploy && validate.IsPHP(o.Type)}); err != nil {
 		return err
 	}
 
@@ -158,11 +172,15 @@ func (p *Provisioner) Create(o CreateOptions) error {
 	return nil
 }
 
-func (p *Provisioner) emptyEnv(path string) error {
+func (p *Provisioner) emptyEnv(path string) error { return p.envFile(path, "") }
+
+// envFile creates a secrets file readable by Apache (group) and owned by
+// deploy; an existing one is left alone.
+func (p *Provisioner) envFile(path, content string) error {
 	if exists(path) {
 		return nil
 	}
-	if err := os.WriteFile(path, nil, 0o640); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
 		return err
 	}
 	if err := os.Chmod(path, 0o640); err != nil {

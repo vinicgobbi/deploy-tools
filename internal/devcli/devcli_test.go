@@ -61,9 +61,9 @@ func TestInitYesThenCheckPasses(t *testing.T) {
 
 func TestInitInteractiveOverridesDetection(t *testing.T) {
 	dir := reactProject(t)
-	// 2 = Ajustar antes de gerar; app, type (1=Laravel... keep React = 2),
+	// 2 = Ajustar antes de gerar; app, type (1=Laravel, 2=Symfony, keep React = 3),
 	// branch, commitizen n, then React group: pm (2=npm), node, lint n, vars.
-	answers := strings.Join([]string{"2", "meu-front", "2", "develop", "n", "2", "22", "n", "VITE_A, VITE_B"}, "\n") + "\n"
+	answers := strings.Join([]string{"2", "meu-front", "3", "develop", "n", "2", "22", "n", "VITE_A, VITE_B"}, "\n") + "\n"
 	out, err := run(t, answers, ref, "init", "-C", dir)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)

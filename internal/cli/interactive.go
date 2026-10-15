@@ -10,8 +10,10 @@ import (
 	"github.com/charmbracelet/huh"
 
 	"github.com/vinicgobbi/deploy-tools/internal/apache"
+	"github.com/vinicgobbi/deploy-tools/internal/appconf"
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
+	"github.com/vinicgobbi/deploy-tools/internal/release"
 	"github.com/vinicgobbi/deploy-tools/internal/tui"
 	"github.com/vinicgobbi/deploy-tools/internal/ui"
 	"github.com/vinicgobbi/deploy-tools/internal/validate"
@@ -68,9 +70,9 @@ func tuiApp(env *Env) tui.App {
 				{
 					Label: "Criar app", Root: true, Run: rooted(func() error { return iCreate(env) }),
 					Desc: text("Cria a pasta do app em " + env.Paths.AppsRoot + ", o .deploy.conf e o site no Apache " +
-						"(HTTPS, com o HTTP redirecionando).\n\nVocê escolhe o nome, o tipo (Laravel, React ou estático), " +
+						"(HTTPS, com o HTTP redirecionando).\n\nVocê escolhe o nome, o tipo (Laravel, Symfony, React, Angular ou estático), " +
 						"o domínio (um subdomínio de um domínio coringa, ou qualquer outro) e se o site já entra no ar. Nada é criado antes do resumo final."),
-					CLI: "sudo deploy-tools app create <app> --type laravel|react|static",
+					CLI: "sudo deploy-tools app create <app> --type laravel|symfony|react|angular|static",
 				},
 				{
 					Label: "Migrar app legado", Root: true, Run: rooted(func() error { return iMigrate(env) }),
@@ -102,9 +104,9 @@ func tuiApp(env *Env) tui.App {
 				{
 					Label: "Configurar app", Root: true, Run: rooted(func() error { return iConfig(env) }),
 					Desc: func() string {
-						return "Grava o .deploy.conf dos apps já migrados que ainda não têm: o tipo e, no Laravel, " +
-							"se o deploy roda as migrations. Com ele, o deploy do Laravel passa a rodar storage:link " +
-							"e os caches.\n\n" +
+						return "Grava o .deploy.conf dos apps já migrados que ainda não têm: o tipo e, no Laravel e no Symfony, " +
+							"se o deploy roda as migrations. Com ele, o deploy passa a rodar os hooks do tipo " +
+							"(storage:link e caches no Laravel, cache:clear no Symfony).\n\n" +
 							apps("Sem .deploy.conf:", needsConf, "Todos os apps migrados já têm .deploy.conf. "+
 								"Para mudar a config de um, use o comando abaixo.")
 					},
@@ -282,9 +284,9 @@ func iCreate(env *Env) error {
 		return err
 	}
 	var fields []huh.Field
-	if o.Type == validate.Laravel {
+	if validate.IsPHP(o.Type) {
 		fields = append(fields, huh.NewConfirm().Title("Rodar as migrations do banco a cada deploy?").
-			Description("php artisan migrate --force, depois de publicar a release.").
+			Description(release.MigrateCommand(o.Type)+", antes de publicar a release.").
 			Affirmative("Sim").Negative("Não").Value(&o.MigrateOnDeploy))
 	}
 	fields = append(fields, huh.NewConfirm().Title("Colocar o site no ar agora?").
@@ -308,7 +310,7 @@ func iCreate(env *Env) error {
 		{"HTTPS", https},
 		{"no ar agora", yesNo(o.Enable)},
 	}
-	if o.Type == validate.Laravel {
+	if validate.IsPHP(o.Type) {
 		summary = append(summary, [2]string{"migrations no deploy", yesNo(o.MigrateOnDeploy)})
 	}
 	env.UI.KV(summary...)
@@ -331,8 +333,8 @@ func iMigrate(env *Env) error {
 	if err := env.UI.Select("Que tipo de projeto é? (parece "+typeName(detected)+")", &o.Type, typeOptions()...); err != nil {
 		return err
 	}
-	if o.Type == validate.Laravel {
-		if o.MigrateOnDeploy, err = env.UI.Confirm("Rodar as migrations do banco a cada deploy?", "php artisan migrate --force"); err != nil {
+	if validate.IsPHP(o.Type) {
+		if o.MigrateOnDeploy, err = env.UI.Confirm("Rodar as migrations do banco a cada deploy?", release.MigrateCommand(o.Type)); err != nil {
 			return err
 		}
 	}
@@ -361,13 +363,7 @@ func iMigrate(env *Env) error {
 }
 
 func detectLegacyType(dir string) string {
-	if _, err := os.Stat(filepath.Join(dir, "artisan")); err == nil {
-		return validate.Laravel
-	}
-	if _, err := os.Stat(filepath.Join(dir, "assets")); err == nil {
-		return validate.React
-	}
-	return validate.Static
+	return appconf.DetectType(dir)
 }
 
 func iStatus(env *Env) error {

@@ -86,7 +86,7 @@ func TestCreateByFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, ok, _ := appconf.Read(env.Paths.AppDir("api"))
-	if !ok || c.Type != "laravel" || !c.LaravelMigrate {
+	if !ok || c.Type != "laravel" || !c.Migrate {
 		t.Fatalf("conf = %+v", c)
 	}
 	if !strings.Contains(out.String(), "sudo deploy-tools app enable api") {
@@ -143,14 +143,14 @@ func TestConfigDetectsType(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, ok, _ := appconf.Read(env.Paths.AppDir("sis"))
-	if !ok || c.Type != "laravel" || !c.LaravelMigrate {
+	if !ok || c.Type != "laravel" || !c.Migrate {
 		t.Fatalf("conf = %+v", c)
 	}
 	if err := runCLI(env, "app", "config", "sis", "--no-migrate-on-deploy"); err != nil {
 		t.Fatal(err)
 	}
 	c, _, _ = appconf.Read(env.Paths.AppDir("sis"))
-	if c.LaravelMigrate || c.Type != "laravel" {
+	if c.Migrate || c.Type != "laravel" {
 		t.Fatalf("conf after --no-migrate-on-deploy = %+v", c)
 	}
 }
@@ -173,7 +173,7 @@ func TestInteractiveCreate(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	c, ok, err := appconf.Read(env.Paths.AppDir("minha-api"))
-	if err != nil || !ok || c.Type != "laravel" || !c.LaravelMigrate {
+	if err != nil || !ok || c.Type != "laravel" || !c.Migrate {
 		t.Fatalf("conf = %+v ok=%v err=%v\n%s", c, ok, err, out)
 	}
 	vhost, err := os.ReadFile(env.Paths.VhostFile("minha-api"))
@@ -245,9 +245,9 @@ func TestStatusCard(t *testing.T) {
 
 func TestInteractiveMigrate(t *testing.T) {
 	// 2 = Migrar; app 1 (docs, the only unmanaged one: "api" is already
-	// migrated and must not be offered); type 3 (Estático); confirm y;
+	// migrated and must not be offered); type 5 (Estático); confirm y;
 	// 18 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"2", "1", "3", "y", "18"}, "\n")+"\n")
+	env, out := testEnv(t, strings.Join([]string{"2", "1", "5", "y", "18"}, "\n")+"\n")
 	_ = os.MkdirAll(env.Paths.AppDir("api"), 0o755)
 	deployN(t, env, "api", "1")
 	root := env.Paths.AppDir("docs")
@@ -289,9 +289,9 @@ func selectOptions(out, title string) []string {
 }
 
 func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
-	// 6 = Configurar; app 1 (semconf, the only one offered); type 3
+	// 6 = Configurar; app 1 (semconf, the only one offered); type 5
 	// (Estático); 18 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"6", "1", "3", "18"}, "\n")+"\n")
+	env, out := testEnv(t, strings.Join([]string{"6", "1", "5", "18"}, "\n")+"\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	if err := runCLI(env, "app", "create", "comconf", "--type", "react"); err != nil {
