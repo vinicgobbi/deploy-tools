@@ -1,3 +1,9 @@
+## v0.5.0 (2026-10-15)
+
+### Feat
+
+- **cli**: copiar comandos gh e chave privada sem selecionar na tela
+
 ## v0.4.0 (2026-10-15)
 
 ### Feat
