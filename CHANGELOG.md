@@ -1,3 +1,9 @@
+## v0.6.0 (2026-10-15)
+
+### Feat
+
+- **cli**: grava a chave da CI gerada na pasta onde o deploy-tools foi chamado
+
 ## v0.5.0 (2026-10-15)
 
 ### Feat
