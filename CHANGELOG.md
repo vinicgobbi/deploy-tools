@@ -1,3 +1,9 @@
+## v0.8.1 (2026-10-15)
+
+### Fix
+
+- **cli**: desfaz o alias www. automático
+
 ## v0.8.0 (2026-10-15)
 
 ### Feat
