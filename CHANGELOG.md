@@ -1,3 +1,9 @@
+## v0.8.0 (2026-10-15)
+
+### Feat
+
+- **cli**: todo domínio cadastrado ganha o alias www.
+
 ## v0.7.0 (2026-10-15)
 
 ### Feat
