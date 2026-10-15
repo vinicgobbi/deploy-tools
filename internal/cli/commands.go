@@ -388,7 +388,8 @@ Se deploy-ci já existia e não era um symlink, ele fica em
 		Short: "Setup de servidor novo: usuário deploy, binário e chave da CI",
 		Long: `Cria (ou corrige) o usuário deploy, o ~/.ssh, instala o binário e,
 com --key, autoriza a chave da CI; com --generate-key, gera a chave aqui
-mesmo e mostra a privada uma vez. Idempotente: pode rodar de novo.`,
+mesmo e grava o par em ./ci_deploy_key(.pub), na pasta atual. Idempotente:
+pode rodar de novo.`,
 		Example: `  sudo ./deploy-tools server setup --generate-key
   sudo ./deploy-tools server setup --key ci_deploy_key.pub`,
 		Args: cobra.NoArgs,
@@ -402,7 +403,7 @@ mesmo e mostra a privada uma vez. Idempotente: pode rodar de novo.`,
 			env.install = nil
 			env.UI.OK("Servidor pronto.")
 			if genKey {
-				return doGenerateKey(env, "", keyOut)
+				return doGenerateKey(env, keyGen{out: keyOut})
 			}
 			steps := []string{}
 			if key == "" {
@@ -421,8 +422,8 @@ mesmo e mostra a privada uma vez. Idempotente: pode rodar de novo.`,
 		},
 	}
 	setup.Flags().StringVar(&key, "key", "", "chave pública da CI a autorizar")
-	setup.Flags().BoolVar(&genKey, "generate-key", false, "gera a chave da CI aqui e mostra a privada uma vez (veja key generate)")
-	setup.Flags().StringVar(&keyOut, "key-out", "", "com --generate-key: grava a chave privada neste arquivo em vez de mostrar")
+	setup.Flags().BoolVar(&genKey, "generate-key", false, "gera a chave da CI aqui e grava em ./ci_deploy_key (veja key generate)")
+	setup.Flags().StringVar(&keyOut, "key-out", "", "com --generate-key: grava a chave privada neste arquivo (padrão: ./ci_deploy_key)")
 	setup.MarkFlagsMutuallyExclusive("key", "generate-key")
 	srv.AddCommand(setup, certsCmd(env), statusCmd(env), baseDomainCmd(env))
 	return srv

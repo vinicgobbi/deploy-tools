@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -267,36 +268,94 @@ func statusCmd(env *Env) *cobra.Command {
 }
 
 const privateKeyWarning = "Esta é a chave PRIVADA da CI: ela publica em todos os apps deste servidor. " +
-	"Copie agora para o secret DEPLOY_SSH_KEY do GitHub. Ela não fica salva no servidor e não será mostrada de novo. " +
+	"Cadastre no secret DEPLOY_SSH_KEY do GitHub e depois apague o arquivo. " +
 	"Não compartilhe (chat, ticket, e-mail, print de tela)."
 
-// doGenerateKey creates and authorizes a CI key pair on the server. The
-// private key is printed once or, with out, written to that file (0600).
-func doGenerateKey(env *Env, comment, out string) error {
-	if comment == "" {
-		host, _ := os.Hostname()
-		comment = "ci-deploy@" + host
+// keyGen is how doGenerateKey hands over the private key.
+type keyGen struct {
+	comment   string
+	out       string // file for the private key; "" = ./ci_deploy_key (next free name)
+	printOnly bool   // print it once instead of saving
+}
+
+// freeKeyPath is dir/ci_deploy_key, or ci_deploy_key-2, -3... so nothing
+// is ever overwritten (the .pub next to it included).
+func freeKeyPath(dir string) string {
+	for i := 1; ; i++ {
+		name := "ci_deploy_key"
+		if i > 1 {
+			name += "-" + strconv.Itoa(i)
+		}
+		p := filepath.Join(dir, name)
+		_, errPriv := os.Lstat(p)
+		_, errPub := os.Lstat(p + ".pub")
+		if os.IsNotExist(errPriv) && os.IsNotExist(errPub) {
+			return p
+		}
 	}
+}
+
+// chownToInvoker gives a file created under sudo to the user who ran sudo,
+// so their own gh (or scp) can read it.
+func chownToInvoker(path string) {
+	uid, err1 := strconv.Atoi(os.Getenv("SUDO_UID"))
+	gid, err2 := strconv.Atoi(os.Getenv("SUDO_GID"))
+	if err1 == nil && err2 == nil && uid != 0 {
+		_ = os.Lchown(path, uid, gid)
+	}
+}
+
+// doGenerateKey creates and authorizes a CI key pair on the server. The
+// private key is saved (0600, owned by the sudo user) in the directory
+// deploy-tools was run from, or where g.out says; g.printOnly shows it
+// once instead.
+func doGenerateKey(env *Env, g keyGen) error {
+	if g.comment == "" {
+		host, _ := os.Hostname()
+		g.comment = "ci-deploy@" + host
+	}
+	out := g.out
 	if out != "" {
 		if _, err := os.Lstat(out); err == nil {
 			return fmt.Errorf("%s já existe — escolha outro caminho", out)
 		}
+	} else if !g.printOnly {
+		dir, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		out = freeKeyPath(dir)
 	}
-	priv, key, err := env.P.GenerateKey(comment)
+	if out != "" {
+		if abs, err := filepath.Abs(out); err == nil {
+			out = abs
+		}
+	}
+	priv, key, err := env.P.GenerateKey(g.comment)
 	if err != nil {
 		return err
 	}
 	name := "ci_deploy_key"
 	if out != "" {
+		pub := key.Type + " " + key.Blob + " " + key.Comment + "\n"
 		if err := os.WriteFile(out, priv, 0o600); err != nil {
 			return fmt.Errorf("a chave pública já foi autorizada, mas a privada não pôde ser gravada (%w) — "+
 				"remova a linha %s do %s e gere de novo", err, key.Fingerprint(), env.Paths.AuthorizedKeys())
 		}
-		env.UI.OK("Chave privada gravada em %s (só root lê). Depois de cadastrar no GitHub, apague o arquivo.", out)
+		_ = os.WriteFile(out+".pub", []byte(pub), 0o644)
+		chownToInvoker(out)
+		chownToInvoker(out + ".pub")
+		env.UI.OK("Chave da CI gerada e autorizada: %s", key.Fingerprint())
+		env.UI.KV(
+			[2]string{"chave privada", out + "  " + env.UI.Faint("(modo 600)")},
+			[2]string{"chave pública", out + ".pub"},
+		)
+		env.UI.Println()
+		env.UI.Warn("%s", privateKeyWarning)
 		name = out
 	} else {
 		env.UI.Println()
-		env.UI.Warn("%s", privateKeyWarning)
+		env.UI.Warn("%s", privateKeyWarning+" Ela não fica salva no servidor e não será mostrada de novo.")
 		env.UI.Println()
 		env.UI.Println(strings.TrimRight(string(priv), "\n"))
 		env.UI.Println()
@@ -305,34 +364,38 @@ func doGenerateKey(env *Env, comment, out string) error {
 	env.UI.Println()
 	s := env.P.Secrets("")
 	printSecrets(env, s, name, secretsTarget{})
-	var items []copyItem
-	if out == "" {
-		items = append(items, copyItem{"a chave privada (DEPLOY_SSH_KEY)", string(priv)})
-	}
-	return offerCopy(env, ghCommands(s, name, secretsTarget{}), items...)
+	return offerCopy(env, ghCommands(s, name, secretsTarget{}),
+		copyItem{"a chave privada (DEPLOY_SSH_KEY)", string(priv)})
 }
 
 func generateKeyCmd(env *Env) *cobra.Command {
-	var comment, out string
+	var g keyGen
 	cmd := &cobra.Command{
 		Use:   "generate",
 		Short: "Gera a chave da CI aqui no servidor e já a autoriza",
-		Long: `Gera um par ed25519 em memória, autoriza a chave pública (restrita ao
-deploy-ci) e mostra a chave PRIVADA uma única vez, para o secret
-DEPLOY_SSH_KEY do GitHub. Ela não fica salva no servidor; com --out, vai
-para esse arquivo (modo 600) em vez da tela.`,
-		Example: `  sudo deploy-tools key generate
-  sudo deploy-tools key generate --out /root/ci_deploy_key   # e depois: gh secret set DEPLOY_SSH_KEY < /root/ci_deploy_key`,
+		Long: `Gera um par ed25519, autoriza a chave pública (restrita ao deploy-ci) e
+grava o par na pasta de onde o comando foi chamado: ci_deploy_key (modo
+600) e ci_deploy_key.pub, ou ci_deploy_key-2... se já existir. Com sudo, os
+arquivos ficam com o seu usuário, para o gh conseguir ler.
+
+Cadastre a privada no secret DEPLOY_SSH_KEY (os comandos gh mostrados já
+apontam para ela) e depois apague o arquivo. Com --print-only, nada é
+gravado: a chave aparece uma única vez na tela.`,
+		Example: `  cd ~ && sudo deploy-tools key generate
+  sudo deploy-tools key generate --out /root/ci_deploy_key
+  sudo deploy-tools key generate --print-only`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			if err := env.RequireRoot(); err != nil {
 				return err
 			}
-			return doGenerateKey(env, comment, out)
+			return doGenerateKey(env, g)
 		},
 	}
-	cmd.Flags().StringVar(&comment, "comment", "", "comentário da chave (padrão: ci-deploy@<hostname>)")
-	cmd.Flags().StringVar(&out, "out", "", "grava a chave privada neste arquivo em vez de mostrar")
+	cmd.Flags().StringVar(&g.comment, "comment", "", "comentário da chave (padrão: ci-deploy@<hostname>)")
+	cmd.Flags().StringVar(&g.out, "out", "", "grava a chave privada neste arquivo (padrão: ./ci_deploy_key)")
+	cmd.Flags().BoolVar(&g.printOnly, "print-only", false, "não grava: mostra a chave privada uma vez na tela")
+	cmd.MarkFlagsMutuallyExclusive("out", "print-only")
 	return cmd
 }
 
@@ -340,7 +403,7 @@ para esse arquivo (modo 600) em vez da tela.`,
 func askKeySource(env *Env, allowSkip bool) (choice, path string, err error) {
 	choice = "generate"
 	opts := []huh.Option[string]{
-		huh.NewOption("Gerar agora, aqui no servidor (a chave privada aparece uma vez)", "generate"),
+		huh.NewOption("Gerar agora, aqui no servidor (salva em ./ci_deploy_key)", "generate"),
 		huh.NewOption("Usar um .pub que já gerei na minha máquina", "file"),
 	}
 	if allowSkip {

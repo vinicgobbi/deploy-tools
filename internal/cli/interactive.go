@@ -165,8 +165,8 @@ func tuiApp(env *Env) tui.App {
 				{
 					Label: "Adicionar chave", Root: true, Run: rooted(func() error { return iAddKey(env) }),
 					Desc: text("Autoriza uma chave da CI, restrita ao comando de deploy. Duas opções:\n\n" +
-						"• Gerar agora, aqui: o par é criado em memória, a pública é autorizada e a privada aparece " +
-						"uma única vez, para o secret DEPLOY_SSH_KEY. Ela não fica salva no servidor.\n" +
+						"• Gerar agora, aqui: a pública é autorizada e o par é gravado em ci_deploy_key(.pub), na pasta " +
+						"de onde você abriu o deploy-tools, para o secret DEPLOY_SSH_KEY. Apague depois de cadastrar.\n" +
 						"• Usar um .pub gerado na sua máquina:\n" +
 						"ssh-keygen -t ed25519 -C ci-deploy -f ci_deploy_key -N \"\""),
 					CLI: "sudo deploy-tools key generate  |  sudo deploy-tools key add <arquivo.pub>",
@@ -195,7 +195,7 @@ func tuiApp(env *Env) tui.App {
 				{
 					Label: "Setup de servidor", Root: true, Run: rooted(func() error { return iSetup(env) }),
 					Desc: text("Prepara um servidor novo: cria (ou corrige) o usuário " + env.Paths.DeployUser +
-						", instala o binário e cuida da chave da CI: gera aqui na hora (a privada aparece uma vez), " +
+						", instala o binário e cuida da chave da CI: gera aqui na hora (gravada em ./ci_deploy_key), " +
 						"autoriza um .pub seu ou pula. Pode rodar de novo sem problema."),
 					CLI: "sudo deploy-tools server setup [--generate-key | --key arquivo.pub]",
 				},
@@ -498,7 +498,7 @@ func iAddKey(env *Env) error {
 		return err
 	}
 	if choice == "generate" {
-		return doGenerateKey(env, "", "")
+		return doGenerateKey(env, keyGen{})
 	}
 	if err := env.P.AddKey(path); err != nil {
 		return err
@@ -530,7 +530,7 @@ func iSetup(env *Env) error {
 	env.UI.OK("Servidor pronto.")
 	switch choice {
 	case "generate":
-		return doGenerateKey(env, "", "")
+		return doGenerateKey(env, keyGen{})
 	case "file":
 		env.UI.Println()
 		s := env.P.Secrets("")

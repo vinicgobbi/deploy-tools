@@ -85,8 +85,8 @@ func offerCopy(env *Env, ghCommands string, items ...copyItem) error {
 
 // saveCommands writes the gh commands to a root-only file.
 func saveCommands(env *Env, commands string) error {
-	home, _ := os.UserHomeDir()
-	def := filepath.Join(home, "github-secrets.sh")
+	dir, _ := os.Getwd()
+	def := filepath.Join(dir, "github-secrets.sh")
 	var path string
 	if err := env.UI.Input("Salvar em", def, &path, nil); err != nil {
 		return err
@@ -104,6 +104,7 @@ func saveCommands(env *Env, commands string) error {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		return err
 	}
-	env.UI.OK("Salvo em %s (só o dono lê). Depois de sair: cat %s", path, path)
+	chownToInvoker(path)
+	env.UI.OK("Salvo em %s (modo 600). Depois de sair: sh %s (precisa do gh logado)", path, path)
 	return nil
 }

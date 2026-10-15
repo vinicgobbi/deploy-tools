@@ -49,12 +49,17 @@ chmod +x deploy-tools-linux-amd64
 sudo ./deploy-tools-linux-amd64 server setup --generate-key
 ```
 
-Com `--generate-key`, o par ed25519 é criado em memória. A chave pública é
-autorizada na hora, e a **privada aparece uma única vez**, para você colar no
-secret `DEPLOY_SSH_KEY`. Ela não fica salva no servidor. Com
-`--key-out /root/ci_deploy_key`, ela vai para esse arquivo (modo 600) em vez
-da tela, por exemplo para usar com `gh secret set`. Depois, apague o
-arquivo. Para gerar outra chave depois: `sudo deploy-tools key generate`.
+Com `--generate-key`, a chave pública é autorizada na hora e o par é gravado
+**na pasta de onde você chamou o comando**: `ci_deploy_key` (modo 600) e
+`ci_deploy_key.pub`, ou `ci_deploy_key-2`… se já existir (nunca
+sobrescreve). Com `sudo`, os arquivos ficam com o seu usuário, então o `gh`
+rodando como você consegue ler. Os comandos `gh secret set` mostrados no fim
+já apontam para o caminho absoluto da chave. Depois de cadastrar o secret,
+apague os arquivos.
+
+Para escolher outro lugar, use `--key-out arquivo`. Para gerar outra chave
+depois, rode `sudo deploy-tools key generate`; com `--print-only`, nada é
+gravado e a chave aparece uma única vez na tela.
 
 Se preferir gerar o par na sua máquina, a chave privada nunca passa pelo
 servidor:
@@ -269,7 +274,7 @@ deploy-tools app status <app>
 deploy-tools release list <app>
 deploy-tools release rollback <app> [release]   # sem release: volta para a anterior
 deploy-tools key add <arquivo.pub>
-deploy-tools key generate [--out arquivo] [--comment c]
+deploy-tools key generate [--out arquivo | --print-only] [--comment c]
 deploy-tools key list
 deploy-tools key secrets [--host h] [--repo dono/repo | --org org]
 deploy-tools server install
@@ -449,8 +454,8 @@ dos secrets (e da chave privada, quando ela é gerada no servidor), aparece a
 opção de **copiar**. A cópia usa OSC 52, uma sequência que pede ao *seu*
 terminal para guardar o texto, e funciona por SSH. Se o seu terminal não
 aceitar (por exemplo, tmux sem `set-clipboard on`), use **Salvar num
-arquivo**: os comandos vão para um arquivo legível só pelo dono, para você
-ler com `cat` depois de sair.
+arquivo**: os comandos vão para `github-secrets.sh`, na pasta atual (modo
+600), para você rodar com `sh` depois de sair, onde o `gh` estiver logado.
 
 O comando lê `DEPLOY_HOST_KEY` das host keys do próprio servidor
 (`/etc/ssh/ssh_host_*_key.pub`), mostra as chaves da CI autorizadas (para

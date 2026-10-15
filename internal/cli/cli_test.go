@@ -542,41 +542,59 @@ func TestBaseDomainAddAsksForCertificate(t *testing.T) {
 }
 
 func TestKeyGenerate(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir) // where deploy-tools was invoked
 	env, out := testEnv(t, "")
 	if err := runCLI(env, "key", "generate"); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
+	key := filepath.Join(dir, "ci_deploy_key")
 	got := out.String()
-	for _, want := range []string{"chave PRIVADA da CI", "não será mostrada de novo", "-----BEGIN OPENSSH PRIVATE KEY-----",
-		"Secrets do GitHub", "ci-deploy@"} {
+	for _, want := range []string{"chave PRIVADA da CI", "chave privada", key, "Secrets do GitHub",
+		"gh secret set DEPLOY_SSH_KEY -R <dono>/<repo> < " + key} {
 		if !strings.Contains(got, want) {
 			t.Errorf("faltou %q:\n%s", want, got)
 		}
 	}
-	if keys, _ := env.P.Keys(); len(keys) != 1 || keys[0].Command != env.Paths.WrapperPath() {
-		t.Fatalf("keys = %+v", keys)
+	if strings.Contains(got, "BEGIN OPENSSH") {
+		t.Fatalf("saved key also printed:\n%s", got)
+	}
+	if fi, err := os.Stat(key); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("private key file: %v %v", fi, err)
+	}
+	pub, _ := os.ReadFile(key + ".pub")
+	keys, _ := env.P.Keys()
+	if len(keys) != 1 || keys[0].Command != env.Paths.WrapperPath() || !strings.Contains(string(pub), keys[0].Blob) {
+		t.Fatalf("keys = %+v, pub = %q", keys, pub)
 	}
 
-	// --out: written 0600, never printed; an existing file is refused.
+	// A second run never overwrites: ci_deploy_key-2.
 	out.Reset()
-	file := filepath.Join(t.TempDir(), "ci_key")
-	if err := runCLI(env, "key", "generate", "--out", file, "--comment", "deploy@acme"); err != nil {
+	if err := runCLI(env, "key", "generate"); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "BEGIN OPENSSH") {
-		t.Fatalf("private key printed with --out:\n%s", out)
+	if _, err := os.Stat(filepath.Join(dir, "ci_deploy_key-2")); err != nil {
+		t.Fatalf("second key: %v\n%s", err, out)
 	}
-	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("file: %v %v", fi, err)
-	}
-	if !strings.Contains(out.String(), "gh secret set DEPLOY_SSH_KEY -R <dono>/<repo> < "+file) {
-		t.Fatalf("gh hint:\n%s", out)
-	}
-	if err := runCLI(env, "key", "generate", "--out", file); err == nil {
+
+	// --out: an existing file is refused before anything is authorized.
+	if err := runCLI(env, "key", "generate", "--out", key); err == nil {
 		t.Fatal("overwrote an existing file")
 	}
 	if keys, _ := env.P.Keys(); len(keys) != 2 {
 		t.Fatalf("the refused run must not authorize a key: %+v", keys)
+	}
+
+	// --print-only: shown once, nothing written.
+	out.Reset()
+	if err := runCLI(env, "key", "generate", "--print-only"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "-----BEGIN OPENSSH PRIVATE KEY-----") || !strings.Contains(out.String(), "não será mostrada de novo") {
+		t.Fatalf("--print-only:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ci_deploy_key-3")); !os.IsNotExist(err) {
+		t.Fatal("--print-only wrote a file")
 	}
 }
 
@@ -587,11 +605,13 @@ func TestServerSetupGeneratesKey(t *testing.T) {
 	if err := runCLI(env, "server", "setup", "--generate-key", "--key", "x.pub"); err == nil {
 		t.Fatal("--generate-key and --key together must fail")
 	}
+	dir := t.TempDir()
+	t.Chdir(dir)
 	if err := runCLI(env, "server", "setup", "--generate-key"); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if !strings.Contains(out.String(), "-----BEGIN OPENSSH PRIVATE KEY-----") {
-		t.Fatalf("no key:\n%s", out)
+	if _, err := os.Stat(filepath.Join(dir, "ci_deploy_key")); err != nil {
+		t.Fatalf("no key file: %v\n%s", err, out)
 	}
 	if keys, _ := env.P.Keys(); len(keys) != 1 {
 		t.Fatalf("keys = %+v", keys)
@@ -641,6 +661,7 @@ func TestTUIOffersCopyAndSave(t *testing.T) {
 
 func TestGeneratedKeyCanBeCopiedInTUI(t *testing.T) {
 	// 1 = copy the private key, 4 = done (2 = gh commands, 3 = save).
+	t.Chdir(t.TempDir())
 	env, out := testEnv(t, "1\n4\n")
 	env.TUI = true
 	var clip bytes.Buffer
