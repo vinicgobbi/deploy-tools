@@ -1,3 +1,11 @@
+## v0.3.0 (2026-10-15)
+
+### Feat
+
+- suporte a Symfony e Angular no deploy-tools e no deploy-dev
+- **tls**: certificado por domínio coringa e site só em HTTP sem certificado
+- **cli**: domínios coringa para o endereço dos apps
+
 ## v0.2.0 (2026-10-14)
 
 ### Feat
