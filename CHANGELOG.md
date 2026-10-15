@@ -1,3 +1,9 @@
+## v0.9.0 (2026-10-15)
+
+### Feat
+
+- **deploy-dev**: workflow gerado separado em jobs (validate, release, build, deploy)
+
 ## v0.8.1 (2026-10-15)
 
 ### Fix
