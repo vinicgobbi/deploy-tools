@@ -57,12 +57,19 @@ func TestUpdateReplacesInstalledDeployDev(t *testing.T) {
 }
 
 func TestGuidedHidesInstallFromPATH(t *testing.T) {
+	titles := func(env *Env) string {
+		var l []string
+		for _, s := range devApp(env, t.TempDir()).Sections {
+			l = append(l, s.Title)
+		}
+		return strings.Join(l, "|")
+	}
 	env := &Env{Version: "v0.9.0"}
-	if n := len(devApp(env, t.TempDir()).Sections); n != 2 {
-		t.Fatalf("loose copy: %d sections, want 2 (Projeto, Instalação)", n)
+	if got := titles(env); got != "Projeto|Instalação|Esta ferramenta" {
+		t.Fatalf("loose copy: %s", got)
 	}
 	env.FromPATH = true
-	if s := devApp(env, t.TempDir()).Sections; len(s) != 1 || s[0].Title != "Projeto" {
-		t.Fatalf("from PATH: %+v", s)
+	if got := titles(env); got != "Projeto|Esta ferramenta" {
+		t.Fatalf("from PATH: %s", got)
 	}
 }

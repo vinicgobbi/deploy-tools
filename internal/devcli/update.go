@@ -97,7 +97,7 @@ func updateCmd(env *Env) *cobra.Command {
 	var check bool
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Atualiza o deploy-dev instalado para a última release",
+		Short: "Verifica e instala a versão mais nova",
 		Long: `Baixa a última release do seu sistema, confere o SHA-256 publicado com
 ela e substitui o deploy-dev instalado no PATH do usuário.
 
@@ -129,4 +129,33 @@ desligar: DEPLOY_DEV_NO_UPDATE=1.`,
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "só verifica, sem instalar")
 	return cmd
+}
+
+// iCheckUpdate is the guided menu's "Verificar atualizações".
+func iCheckUpdate(env *Env) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	r, err := env.Updates.Latest(ctx)
+	if err != nil {
+		return err
+	}
+	env.UI.KV([2]string{"esta versão", env.Version}, [2]string{"última release", r.Version})
+	env.UI.Println()
+	if !update.Newer(env.Version, r.Version) {
+		env.UI.OK("Está na versão mais recente.")
+		return nil
+	}
+	if _, dst := installedPath(); dst == "" {
+		env.UI.Hint("O deploy-dev não está instalado no PATH: baixe a release nova e rode install (ou use \"Instalar no PATH\").")
+		return nil
+	}
+	ok, err := env.UI.ConfirmDefault("Atualizar agora para "+r.Version+"?", "Vale a partir da próxima execução.", true)
+	if err != nil || !ok {
+		return err
+	}
+	if err := applyUpdate(env, r); err != nil {
+		return err
+	}
+	env.UI.OK("Atualizado para %s. Saia e abra de novo para usar a versão nova.", r.Version)
+	return nil
 }

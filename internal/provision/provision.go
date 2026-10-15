@@ -29,6 +29,8 @@ type Provisioner struct {
 	Owner  Owner
 	Out    io.Writer
 	Now    func() time.Time
+	// UserExists replaces the system user lookup in tests; nil = os/user.
+	UserExists func(name string) bool
 }
 
 func New(p config.Paths, out io.Writer) *Provisioner {

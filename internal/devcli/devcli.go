@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 
+	"github.com/vinicgobbi/deploy-tools/internal/clitext"
 	"github.com/vinicgobbi/deploy-tools/internal/project"
 	"github.com/vinicgobbi/deploy-tools/internal/ui"
 	"github.com/vinicgobbi/deploy-tools/internal/update"
@@ -45,7 +46,7 @@ func Execute(env *Env, args []string) int {
 		if errors.Is(err, errFindings) {
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, ui.ErrorText(err.Error()))
+		fmt.Fprintln(os.Stderr, ui.ErrorText(clitext.Translate(err).Error()))
 		return 1
 	}
 	return 0
@@ -56,14 +57,20 @@ var errFindings = errors.New("check encontrou problemas")
 func NewRoot(env *Env) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "deploy-dev",
-		Short: "Configura o deploy de um projeto (lado do desenvolvedor)",
-		Long: `deploy-dev gera e valida o workflow de deploy (.github/workflows/deploy.yml)
-dos projetos que publicam no servidor via deploy-tools.
+		Short: "Configura o deploy de um projeto pelo GitHub Actions",
+		Long: `deploy-dev prepara o deploy de um projeto: detecta o tipo (Laravel,
+Symfony, React, Angular ou estático), gera o workflow do GitHub Actions
+(.github/workflows/deploy.yml) e confere os workflows que já existem.
 
-Roda na sua máquina, dentro do repositório do projeto. Os comandos de
-servidor ficam no deploy-tools, instalado só no servidor.
+Rode na sua máquina, dentro da pasta do projeto. O servidor é configurado
+com o deploy-tools.
 
-Sem argumentos, num terminal, abre um modo guiado.`,
+Sem argumentos, num terminal, abre um menu guiado.
+
+Por onde começar:
+  deploy-dev init     gera o workflow deste projeto
+  deploy-dev check    confere os workflows
+  deploy-dev          menu guiado`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
@@ -81,10 +88,23 @@ Sem argumentos, num terminal, abre um modo guiado.`,
 			return guided(env, ".")
 		},
 	}
-	root.AddCommand(initCmd(env), checkCmd(env), installCmd(env), updateCmd(env), &cobra.Command{
-		Use:   "version",
-		Short: "Mostra a versão (e a da action de deploy que o init fixa)",
-		Args:  cobra.NoArgs,
+	root.AddGroup(
+		&cobra.Group{ID: "project", Title: "Projeto:"},
+		&cobra.Group{ID: "self", Title: "Esta ferramenta:"},
+	)
+	for _, c := range []*cobra.Command{initCmd(env), checkCmd(env)} {
+		c.GroupID = "project"
+		root.AddCommand(c)
+	}
+	for _, c := range []*cobra.Command{installCmd(env), updateCmd(env)} {
+		c.GroupID = "self"
+		root.AddCommand(c)
+	}
+	root.AddCommand(&cobra.Command{
+		GroupID: "self",
+		Use:     "version",
+		Short:   "Mostra a versão (e a da action de deploy que o init fixa)",
+		Args:    cobra.NoArgs,
 		Run: func(*cobra.Command, []string) {
 			env.UI.Println("deploy-dev", env.Version)
 			if validRef(env.Commit) {
@@ -92,6 +112,7 @@ Sem argumentos, num terminal, abre um modo guiado.`,
 			}
 		},
 	})
+	clitext.Localize(root)
 	return root
 }
 
@@ -101,7 +122,7 @@ func initCmd(env *Env) *cobra.Command {
 	fl := &initFlags{}
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Gera o .github/workflows/deploy.yml do projeto",
+		Short: "Cria o workflow de deploy do projeto (.github/workflows/deploy.yml)",
 		Long: `Detecta o tipo do projeto (Laravel, Symfony, React, Angular ou
 estático/mkdocs), mostra o que encontrou para você confirmar ou ajustar e
 gera o workflow de deploy para o GitHub Actions: actions fixadas por SHA,
@@ -383,7 +404,7 @@ func checkCmd(env *Env) *cobra.Command {
 	var strict bool
 	cmd := &cobra.Command{
 		Use:   "check [dir]",
-		Short: "Valida os workflows do projeto contra as convenções de deploy",
+		Short: "Confere os workflows do projeto e aponta problemas",
 		Long: `Verifica .github/workflows/*.yml: actions fixadas por SHA (com a versão
 comentada), formato do release id, passo de SSH copiado que pode virar a
 action do deploy-tools, restos de Gitea (contexto gitea.*, URL em uses:,

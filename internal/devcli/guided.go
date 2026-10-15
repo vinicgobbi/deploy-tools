@@ -32,6 +32,15 @@ func devApp(env *Env, dir string) tui.App {
 			}
 			return s
 		},
+		Notice: func() string {
+			switch {
+			case !hasWorkflow():
+				return "Este projeto ainda não tem workflow de deploy: comece por \"Gerar workflow\"."
+			case !isGitRoot(dir):
+				return "Esta pasta não é a raiz de um repositório git: abra o deploy-dev na raiz do projeto."
+			}
+			return ""
+		},
 		Sections: []tui.Section{
 			{Title: "Projeto", Items: []tui.Item{
 				{
@@ -51,7 +60,7 @@ func devApp(env *Env, dir string) tui.App {
 					CLI: "deploy-dev init",
 				},
 				{
-					Label: "Checar workflows",
+					Label: "Conferir workflows",
 					Run: func() error {
 						// The findings are already in the output; no extra error line.
 						if err := runCheck(env, dir, false); !errors.Is(err, errFindings) {
@@ -73,6 +82,19 @@ func devApp(env *Env, dir string) tui.App {
 			}},
 		},
 	}
+	updates := tui.Section{Title: "Esta ferramenta", Items: []tui.Item{{
+		Label: "Verificar atualizações", Run: func() error { return iCheckUpdate(env) },
+		Desc: func() string {
+			auto := "ligada (verifica no máximo uma vez por dia; desligue com DEPLOY_DEV_NO_UPDATE=1)"
+			if !env.AutoUpdate {
+				auto = "desligada"
+			}
+			return "Consulta a última release no GitHub e, se houver versão nova, oferece instalar sobre a " +
+				"cópia do seu PATH. O download é conferido pelo SHA-256 publicado na release.\n\n" +
+				"Esta versão: " + env.Version + ".\nAtualização automática: " + auto + "."
+		},
+		CLI: "deploy-dev update  |  deploy-dev update --check",
+	}}}
 	// Called by name, it is the installed binary (kept up to date by the
 	// automatic update): installing makes sense only for a loose copy.
 	if !env.FromPATH {
@@ -93,5 +115,11 @@ func devApp(env *Env, dir string) tui.App {
 			},
 		}})
 	}
+	app.Sections = append(app.Sections, updates)
 	return app
+}
+
+func isGitRoot(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }

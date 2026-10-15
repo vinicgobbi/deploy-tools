@@ -21,7 +21,7 @@ func certFlags(cmd *cobra.Command, c *provision.CertChoice) {
 func domainCmd(env *Env) *cobra.Command {
 	dom := &cobra.Command{
 		Use:   "domain",
-		Short: "Domínios do site de um app (listar, adicionar, remover)",
+		Short: "Domínios do site: listar, adicionar e remover",
 		Long: `O primeiro domínio é o ServerName do site; os outros são ServerAlias.
 Ao adicionar ou remover, se o certificado atual não cobrir o novo conjunto,
 o deploy-tools procura um que cubra e troca. Um site ativo é alterado com
@@ -96,7 +96,7 @@ func certCmd(env *Env) *cobra.Command {
 	var c provision.CertChoice
 	cmd := &cobra.Command{
 		Use:   "cert <app>",
-		Short: "Troca o certificado TLS do site (procura um que cubra os domínios)",
+		Short: "Ativa ou troca o HTTPS do site (procura o certificado sozinho)",
 		Long: `Sem flags, procura no servidor um certificado válido que cubra todos os
 domínios do site e tenha a chave privada correspondente:
   ` + strings.Join(tlscert.DefaultDirs, "\n  ") + `
@@ -138,7 +138,7 @@ Nunca troca um certificado real pelo autoassinado provisório.`,
 func certsCmd(env *Env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "certs",
-		Short: "Lista os certificados TLS encontrados no servidor",
+		Short: "Lista os certificados HTTPS encontrados no servidor",
 		Long: `Mostra os certificados (com chave privada correspondente) que o
 deploy-tools encontra e pode usar nos sites, com os domínios cobertos e a
 validade. As pastas privadas só são legíveis como root.`,

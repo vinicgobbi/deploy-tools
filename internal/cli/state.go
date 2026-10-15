@@ -133,7 +133,7 @@ func printSecrets(env *Env, s provision.Secrets, privateKey string, target secre
 			env.UI.Hint("Nenhuma chave da CI autorizada ainda: sudo deploy-tools key add %s.pub", privateKey)
 		} else {
 			env.UI.Println()
-			env.UI.Println(env.UI.Faint("Chaves da CI autorizadas (a DEPLOY_SSH_KEY precisa ser o par de uma delas):"))
+			env.UI.Println(env.UI.Faint("Chaves do GitHub autorizadas (a DEPLOY_SSH_KEY precisa ser o par de uma delas):"))
 			for _, k := range s.CIKeys {
 				env.UI.Println("    " + k.Fingerprint() + "  " + orDash(k.Comment))
 			}
@@ -303,7 +303,7 @@ func secretsCmd(env *Env) *cobra.Command {
 	var copyGh, ghOnly, script bool
 	cmd := &cobra.Command{
 		Use:   "secrets",
-		Short: "Mostra como devem ficar os secrets do GitHub para este servidor",
+		Short: "Mostra os secrets a cadastrar no GitHub (e copia ou gera um script)",
 		Long: `Mostra os valores de DEPLOY_HOST, DEPLOY_USER e DEPLOY_HOST_KEY (lidos
 deste servidor), de onde vem a DEPLOY_SSH_KEY e os comandos "gh secret set"
 equivalentes. A chave privada não fica no servidor e nunca é mostrada.
@@ -348,7 +348,7 @@ Não compartilhe a saída: cole os valores só nos secrets do GitHub.`,
 func statusCmd(env *Env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Mostra se o deploy-tools está instalado ou rodando solto",
+		Short: "Mostra a versão instalada e se esta cópia é a instalada",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			env.UI.Println("deploy-tools", env.Version)
@@ -474,7 +474,7 @@ func generateKeyCmd(env *Env) *cobra.Command {
 	var g keyGen
 	cmd := &cobra.Command{
 		Use:   "generate",
-		Short: "Gera a chave da CI aqui no servidor e já a autoriza",
+		Short: "Cria aqui a chave que o GitHub usa para publicar (e já autoriza)",
 		Long: `Gera um par ed25519, autoriza a chave pública (restrita ao deploy-ci) e
 grava o par na pasta de onde o comando foi chamado: ci_deploy_key (modo
 600) e ci_deploy_key.pub, ou ci_deploy_key-2... se já existir. Com sudo, os

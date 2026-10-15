@@ -41,6 +41,9 @@ type Section struct {
 type App struct {
 	Title    string
 	Subtitle func() string // context shown next to the title
+	// Notice is one line under the header, e.g. the next step to take; ""
+	// shows nothing. It runs on every redraw, so keep it cheap.
+	Notice   func() string
 	Sections []Section
 	// IsRoot reports whether the user has root; nil when no item needs it.
 	IsRoot func() bool
@@ -101,6 +104,12 @@ func plain(u *ui.UI, app App) error {
 			sub = app.Subtitle()
 		}
 		u.Header(app.Title, sub)
+		if app.Notice != nil {
+			if n := app.Notice(); n != "" {
+				u.Hint("→ %s", n)
+				u.Println()
+			}
+		}
 		if app.IsRoot != nil && !app.IsRoot() {
 			u.Warn("Sem sudo: dá para consultar, mas criar ou alterar exige rodar com sudo.")
 			u.Println()
@@ -324,6 +333,7 @@ var (
 	faintSt   = lipgloss.NewStyle().Faint(true)
 	selSt     = lipgloss.NewStyle().Bold(true).Foreground(accent)
 	okSt      = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	noticeSt  = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	warnSt    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	boxSt     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8")).Padding(0, 1)
 	activeBox = boxSt.BorderForeground(accent)
@@ -343,7 +353,13 @@ func (m *model) sideW() int {
 func (m *model) panelW() int { return max(20, m.w-m.sideW()-4-4) }
 
 // bodyH is the height inside the boxes (header and footer take a line each).
-func (m *model) bodyH() int { return max(5, m.h-2-2) }
+func (m *model) bodyH() int {
+	h := m.h - 2 - 2
+	if m.notice() != "" {
+		h--
+	}
+	return max(5, h)
+}
 
 func (m *model) layout() {
 	m.vp.Width = m.panelW()
@@ -415,6 +431,7 @@ func (m *model) View() string {
 	if m.w < 60 || m.h < 16 {
 		return "Terminal pequeno demais: aumente a janela (mínimo 60×16).\n\nq sai."
 	}
+	m.layout() // the notice line may come and go after an action
 	return lipgloss.JoinVertical(lipgloss.Left, m.header(), m.body(), m.footer())
 }
 
@@ -433,7 +450,30 @@ func (m *model) header() string {
 		}
 	}
 	gap := max(1, m.w-lipgloss.Width(left)-lipgloss.Width(right)-1)
-	return " " + left + strings.Repeat(" ", gap) + right
+	line := " " + left + strings.Repeat(" ", gap) + right
+	if n := m.notice(); n != "" {
+		line += "\n " + noticeSt.Render(truncate("→ "+n, m.w-2))
+	}
+	return line
+}
+
+func (m *model) notice() string {
+	if m.app.Notice == nil {
+		return ""
+	}
+	return m.app.Notice()
+}
+
+// truncate cuts s to w cells, with an ellipsis.
+func truncate(s string, w int) string {
+	if lipgloss.Width(s) <= w || w < 2 {
+		return s
+	}
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r))+1 > w {
+		r = r[:len(r)-1]
+	}
+	return string(r) + "…"
 }
 
 func (m *model) body() string {

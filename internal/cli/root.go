@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/vinicgobbi/deploy-tools/internal/clitext"
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
 	"github.com/vinicgobbi/deploy-tools/internal/ui"
@@ -67,11 +68,17 @@ func NewEnv(version string) *Env {
 func NewRoot(env *Env) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "deploy-tools",
-		Short: "Provisiona e gerencia apps no modelo releases/current",
-		Long: `deploy-tools provisiona e gerencia apps servidos pelo Apache no modelo
-releases/current, com deploy via GitHub Actions.
+		Short: "Publica e gerencia sites no Apache, com deploy pelo GitHub Actions",
+		Long: `deploy-tools publica e gerencia sites (Laravel, Symfony, React, Angular ou
+estáticos) no Apache deste servidor. Cada push no GitHub vira uma versão
+nova do site, com volta instantânea para a anterior.
 
-Sem argumentos, num terminal, abre um menu interativo.`,
+Sem argumentos, num terminal, abre um menu com tudo isto e o próximo passo.
+
+Por onde começar:
+  sudo deploy-tools server setup         servidor novo
+  sudo deploy-tools app create meu-site  primeiro app
+  sudo deploy-tools                      menu interativo`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
@@ -92,14 +99,15 @@ Sem argumentos, num terminal, abre um menu interativo.`,
 		},
 	}
 	root.AddGroup(
-		&cobra.Group{ID: "main", Title: "Comandos:"},
+		&cobra.Group{ID: "apps", Title: "Apps:"},
+		&cobra.Group{ID: "server", Title: "Servidor:"},
+		&cobra.Group{ID: "self", Title: "Esta ferramenta:"},
 	)
-	for _, c := range []*cobra.Command{appCmd(env), releaseCmd(env), keyCmd(env), serverCmd(env), updateCmd(env)} {
-		c.GroupID = "main"
-		root.AddCommand(c)
-	}
+	grouped(root, "apps", appCmd(env), releaseCmd(env))
+	grouped(root, "server", serverCmd(env), keyCmd(env))
+	grouped(root, "self", updateCmd(env))
 	root.AddCommand(&cobra.Command{
-		GroupID: "main",
+		GroupID: "self",
 		Use:     "version",
 		Short:   "Mostra a versão",
 		Args:    cobra.NoArgs,
@@ -118,8 +126,7 @@ Sem argumentos, num terminal, abre um menu interativo.`,
 			return errors.New("o modo ci é tratado antes da CLI; chame o binário como deploy-ci")
 		},
 	})
-	root.SetHelpCommandGroupID("main")
-	root.SetCompletionCommandGroupID("main")
+	clitext.Localize(root)
 	return root
 }
 
@@ -133,7 +140,7 @@ func Execute(env *Env, args []string) int {
 			fmt.Fprintln(os.Stderr, "Cancelado.")
 			return 130
 		}
-		fmt.Fprintln(os.Stderr, ui.ErrorText(err.Error()))
+		fmt.Fprintln(os.Stderr, ui.ErrorText(clitext.Translate(err).Error()))
 		return 1
 	}
 	return 0

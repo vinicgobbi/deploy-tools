@@ -159,17 +159,19 @@ func TestConfigDetectsType(t *testing.T) {
 }
 
 // In accessible mode the TUI is a numbered menu with the same items:
-// 1 Criar app, 2 Migrar, 3 Status, 4 Listar, 5 Rollback, 6 Configurar,
-// 7 Ativar site, 8 Desativar site, 9 Domínios, 10 Certificado TLS,
-// 11 Chaves, 12 Adicionar chave, 13 Secrets, 14 Instalar, 15 Setup,
-// 16 Domínios coringa, 17 Certificados, 18 Sair.
+// 1 Criar app, 2 Listar apps, 3 Ver um app, 4 Colocar no ar, 5 Tirar do ar,
+// 6 Domínios do site, 7 HTTPS do site, 8 Voltar versão, 9 Tipo e migrations,
+// 10 Converter site existente, 11 Preparar servidor, 12 Chaves do GitHub,
+// 13 Gerar ou adicionar chave, 14 Secrets do GitHub, 15 Domínios coringa,
+// 16 Certificados HTTPS, 17 Instalar/atualizar, 18 Verificar atualizações,
+// 19 Sair.
 
 func TestInteractiveCreate(t *testing.T) {
 	// 1 = Criar app. Then name, type (1 = Laravel), domain (1 = the
 	// example.com base; empty subdomain keeps the app name; no extra
 	// domains), no certificate (n), migrations y, enable n, confirm y. The menu comes back
-	// below the result: 18 = Sair.
-	answers := strings.Join([]string{"1", "minha-api", "1", "1", "", "", "n", "y", "n", "y", "18"}, "\n") + "\n"
+	// below the result: 19 = Sair.
+	answers := strings.Join([]string{"1", "minha-api", "1", "1", "", "", "n", "y", "n", "y", "19"}, "\n") + "\n"
 	env, out := testEnv(t, answers)
 	env.UI.ClearScreen = true
 	if err := runCLI(env); err != nil {
@@ -198,7 +200,7 @@ func TestInteractiveCreate(t *testing.T) {
 }
 
 func TestInteractiveWithoutRootFailsBeforeAsking(t *testing.T) {
-	env, out := testEnv(t, "1\n18\n")
+	env, out := testEnv(t, "1\n19\n")
 	env.RequireRoot = func() error { return errors.New("precisa de root — rode com sudo") }
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -210,9 +212,9 @@ func TestInteractiveWithoutRootFailsBeforeAsking(t *testing.T) {
 }
 
 func TestInteractiveRollback(t *testing.T) {
-	// 5 = Rollback; app 1 (docs); release 1 (= "2", newest non-current);
-	// confirm y; 18 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"5", "1", "1", "y", "18"}, "\n")+"\n")
+	// 8 = Voltar versão; app 1 (docs); release 1 (= "2", newest non-current);
+	// confirm y; 19 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"8", "1", "1", "y", "19"}, "\n")+"\n")
 	_ = os.MkdirAll(env.Paths.AppDir("docs"), 0o755)
 	deployN(t, env, "docs", "1", "2", "3")
 	if err := runCLI(env); err != nil {
@@ -247,10 +249,10 @@ func TestStatusCard(t *testing.T) {
 }
 
 func TestInteractiveMigrate(t *testing.T) {
-	// 2 = Migrar; app 1 (docs, the only unmanaged one: "api" is already
+	// 10 = Converter site existente; app 1 (docs, the only unmanaged one: "api" is already
 	// migrated and must not be offered); type 5 (Estático); confirm y;
-	// 18 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"2", "1", "5", "y", "18"}, "\n")+"\n")
+	// 19 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"10", "1", "5", "y", "19"}, "\n")+"\n")
 	_ = os.MkdirAll(env.Paths.AppDir("api"), 0o755)
 	deployN(t, env, "api", "1")
 	root := env.Paths.AppDir("docs")
@@ -292,9 +294,9 @@ func selectOptions(out, title string) []string {
 }
 
 func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
-	// 6 = Configurar; app 1 (semconf, the only one offered); type 5
-	// (Estático); 18 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"6", "1", "5", "18"}, "\n")+"\n")
+	// 9 = Tipo e migrations; app 1 (semconf, the only one offered); type 5
+	// (Estático); 19 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"9", "1", "5", "19"}, "\n")+"\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	if err := runCLI(env, "app", "create", "comconf", "--type", "react"); err != nil {
@@ -317,7 +319,7 @@ func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
 }
 
 func TestInteractiveConfigNothingToDo(t *testing.T) {
-	env, out := testEnv(t, "6\n18\n")
+	env, out := testEnv(t, "9\n19\n")
 	_ = os.MkdirAll(env.Paths.AppDir("legado"), 0o755)
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -328,9 +330,9 @@ func TestInteractiveConfigNothingToDo(t *testing.T) {
 }
 
 func TestInteractiveDisable(t *testing.T) {
-	// 8 = Desativar site; app 1 (front, the only active site); confirm y;
-	// 18 = Sair.
-	env, out := testEnv(t, "8\n1\ny\n18\n")
+	// 5 = Tirar do ar; app 1 (front, the only active site); confirm y;
+	// 19 = Sair.
+	env, out := testEnv(t, "5\n1\ny\n19\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	for _, app := range []string{"front", "parado"} {
@@ -768,5 +770,47 @@ func TestSetupAsksDeployHostAndScriptIsSaved(t *testing.T) {
 	}
 	if loaded, _ := config.Load(env2.Paths.ConfigFile); loaded.DeployHost != "deploy.example.com" {
 		t.Fatalf("DEPLOY_HOST = %q", loaded.DeployHost)
+	}
+}
+
+func TestNextStepGuidesANewServer(t *testing.T) {
+	env, _ := testEnv(t, "")
+	exists := false
+	env.P.UserExists = func(string) bool { return exists }
+	steps := []string{}
+	step := func() string { s := nextStep(env); steps = append(steps, s); return s }
+
+	if !strings.Contains(step(), "Preparar servidor") {
+		t.Fatalf("fresh: %q", steps)
+	}
+	exists = true
+	bin := filepath.Join(t.TempDir(), "dt")
+	_ = os.WriteFile(bin, []byte("x"), 0o755)
+	if err := env.P.Install(bin); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(step(), "Gerar ou adicionar chave") {
+		t.Fatalf("no key: %q", steps)
+	}
+	t.Chdir(t.TempDir())
+	if err := runCLI(env, "key", "generate"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(step(), "Criar app") {
+		t.Fatalf("no app: %q", steps)
+	}
+	if err := runCLI(env, "app", "create", "site", "--type", "static"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(step(), "Colocar no ar") {
+		t.Fatalf("disabled site: %q", steps)
+	}
+	_ = os.Symlink(env.Paths.VhostFile("site"), filepath.Join(env.Paths.SitesEnabled, "site.conf"))
+	if !strings.Contains(step(), "só em HTTP") {
+		t.Fatalf("no TLS: %q", steps)
+	}
+	env.RequireRoot = func() error { return errors.New("sem root") }
+	if step() != "" {
+		t.Fatalf("without root the header already says so: %q", steps)
 	}
 }

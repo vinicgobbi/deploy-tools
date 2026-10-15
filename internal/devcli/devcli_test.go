@@ -126,8 +126,9 @@ func TestGuidedMenu(t *testing.T) {
 	t.Chdir(dir)
 	isInstalled = func() bool { return true }
 	t.Cleanup(func() { isInstalled = installed })
-	// 1 = Gerar workflow; 1 = Sim (detecção); 2 = Checar; 4 = Sair.
-	out, err := run(t, "1\n1\n2\n4\n", ref)
+	// 1 = Gerar workflow; 1 = Sim (detecção); 2 = Checar; 5 = Sair (3 =
+	// Instalar, 4 = Verificar atualizações).
+	out, err := run(t, "1\n1\n2\n5\n", ref)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}

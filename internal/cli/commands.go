@@ -51,12 +51,12 @@ func completeApps(env *Env) cobra.CompletionFunc {
 }
 
 func appCmd(env *Env) *cobra.Command {
-	app := &cobra.Command{Use: "app", Short: "Criar, migrar, configurar e inspecionar apps"}
+	app := &cobra.Command{Use: "app", Short: "Criar, ver e publicar sites: domínios, HTTPS, no ar/fora do ar"}
 
 	var create provision.CreateOptions
 	createCmd := &cobra.Command{
 		Use:   "create <app>",
-		Short: "Cria um app novo (estrutura + vhost)",
+		Short: "Cria um app novo (pasta, configuração e site no Apache)",
 		Long: `Cria /var/www/<app>/{releases,shared}, o .deploy.conf e o vhost em
 sites-available. Sem --enable, o vhost não é ativado: revise DNS e
 certificado e depois rode "deploy-tools app enable <app>".
@@ -112,7 +112,7 @@ informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <a
 	var migYes bool
 	migrateCmd := &cobra.Command{
 		Use:   "migrate <app>",
-		Short: "Converte um app já em produção para releases/current, sem downtime",
+		Short: "Converte um site que já está no ar para o deploy por versões, sem derrubá-lo",
 		Long: `Para apps que hoje servem direto de /var/www/<app> (diretório comum).
 O conteúdo atual vira releases/<timestamp>-pre-migracao, .env e storage/
 (Laravel), ou .env.local e var/log (Symfony), vão para shared/, e o vhost é repontado para current com
@@ -144,7 +144,7 @@ configtest antes do reload. O site continua no ar o tempo todo.`,
 	var enableYes bool
 	enableCmd := &cobra.Command{
 		Use:   "enable <app>",
-		Short: "Coloca o site do app no ar (a2ensite, com configtest antes e depois)",
+		Short: "Coloca o site no ar",
 		Long: `Ativa o site do app com a2ensite. A config do Apache precisa passar no
 configtest antes (se já estiver com erro, nada é alterado) e depois da
 mudança; só então o Apache é recarregado. Se o teste ou o reload falhar,
@@ -168,7 +168,7 @@ o site é desativado de novo.`,
 	var disableYes bool
 	disableCmd := &cobra.Command{
 		Use:   "disable <app>",
-		Short: "Tira o site do app do ar (a2dissite, com configtest antes e depois)",
+		Short: "Tira o site do ar (arquivos e versões continuam)",
 		Long: `Desativa o site do app com a2dissite, com as mesmas checagens do enable:
 configtest antes e depois, reload só se passar e, em caso de falha, o site
 é ativado de novo. Arquivos, releases e deploy pela CI não mudam; volte com
@@ -192,14 +192,14 @@ configtest antes e depois, reload só se passar e, em caso de falha, o site
 	listCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "Lista os apps em /var/www",
+		Short:   "Lista os apps do servidor e a situação de cada um",
 		Args:    cobra.NoArgs,
 		RunE:    func(*cobra.Command, []string) error { return doList(env) },
 	}
 
 	statusCmd := &cobra.Command{
 		Use:               "status <app>",
-		Short:             "Mostra config, vhost e releases de um app",
+		Short:             "Mostra tudo sobre um app: endereço, versões e o que falta",
 		Example:           "  deploy-tools app status docs",
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeApps(env),
@@ -216,7 +216,7 @@ configtest antes e depois, reload só se passar e, em caso de falha, o site
 	var cfgMigrate, cfgNoMigrate bool
 	configCmd := &cobra.Command{
 		Use:   "config <app>",
-		Short: "Grava o .deploy.conf de um app existente (tipo, migrations)",
+		Short: "Muda o tipo do app e se o deploy roda as migrations",
 		Long: `Apps criados antes do deploy-tools em Go não têm .deploy.conf e fazem
 deploy sem hooks (como sempre fizeram). Este comando grava a config;
 para Laravel, os próximos deploys passam a rodar storage:link,
@@ -252,17 +252,24 @@ Sem --type, o tipo é detectado a partir de current/.`,
 	configCmd.MarkFlagsMutuallyExclusive("migrate-on-deploy", "no-migrate-on-deploy")
 	_ = configCmd.RegisterFlagCompletionFunc("type", completeTypes)
 
-	app.AddCommand(createCmd, migrateCmd, enableCmd, disableCmd, listCmd, statusCmd, configCmd, domainCmd(env), certCmd(env))
+	app.AddGroup(
+		&cobra.Group{ID: "start", Title: "Começar:"},
+		&cobra.Group{ID: "site", Title: "Site:"},
+		&cobra.Group{ID: "adjust", Title: "Ajustes:"},
+	)
+	grouped(app, "start", createCmd, listCmd, statusCmd)
+	grouped(app, "site", enableCmd, disableCmd, domainCmd(env), certCmd(env))
+	grouped(app, "adjust", configCmd, migrateCmd)
 	return app
 }
 
 func releaseCmd(env *Env) *cobra.Command {
-	rel := &cobra.Command{Use: "release", Short: "Listar releases e fazer rollback"}
+	rel := &cobra.Command{Use: "release", Short: "Versões publicadas de cada app e volta para uma anterior"}
 
 	listCmd := &cobra.Command{
 		Use:               "list <app>",
 		Aliases:           []string{"ls"},
-		Short:             "Lista as releases (mais nova primeiro)",
+		Short:             "Lista as versões publicadas de um app (mais nova primeiro)",
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeApps(env),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -282,7 +289,7 @@ func releaseCmd(env *Env) *cobra.Command {
 	var yes bool
 	rollbackCmd := &cobra.Command{
 		Use:   "rollback <app> [release]",
-		Short: "Volta current para outra release (padrão: a anterior)",
+		Short: "Volta o app para uma versão anterior, na hora (padrão: a anterior)",
 		Long: `Repõe current para uma release que ainda está em disco, sem novo build.
 Sem [release], volta para a release imediatamente anterior à atual.`,
 		Example: `  sudo deploy-tools release rollback docs
@@ -321,10 +328,10 @@ Sem [release], volta para a release imediatamente anterior à atual.`,
 }
 
 func keyCmd(env *Env) *cobra.Command {
-	key := &cobra.Command{Use: "key", Short: "Chaves SSH da CI (authorized_keys do usuário deploy)"}
+	key := &cobra.Command{Use: "key", Short: "Chave e secrets que o GitHub usa para publicar"}
 	key.AddCommand(&cobra.Command{
 		Use:   "add <arquivo.pub>",
-		Short: "Autoriza uma chave pública, restrita ao forced command",
+		Short: "Autoriza uma chave pública criada na sua máquina",
 		Long: `Adiciona a chave ao authorized_keys do usuário deploy com
 command="/usr/local/bin/deploy-ci" e no-pty etc., para que ela só
 consiga fazer deploy/rollback/list — nunca abrir um shell.
@@ -350,20 +357,21 @@ Gere o par na sua máquina (não no servidor):
 	key.AddCommand(&cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "Lista as chaves autorizadas",
+		Short:   "Lista as chaves que podem publicar",
 		Args:    cobra.NoArgs,
 		RunE:    func(*cobra.Command, []string) error { return doKeys(env) },
 	})
 	key.AddCommand(generateKeyCmd(env))
 	key.AddCommand(secretsCmd(env))
+	order(key, "generate", "add", "list", "secrets")
 	return key
 }
 
 func serverCmd(env *Env) *cobra.Command {
-	srv := &cobra.Command{Use: "server", Short: "Instalação e setup do servidor"}
+	srv := &cobra.Command{Use: "server", Short: "Preparar e configurar o servidor"}
 	srv.AddCommand(&cobra.Command{
 		Use:   "install",
-		Short: "Instala/atualiza este binário (troca o deploy-ci atomicamente)",
+		Short: "Instala esta cópia do deploy-tools no servidor",
 		Long: `Copia este binário para /usr/local/bin/deploy-tools e faz de
 /usr/local/bin/deploy-ci um symlink para ele. Não mexe em usuário,
 chaves nem apps: é o comando para atualizar um servidor já configurado.
@@ -388,7 +396,7 @@ Se deploy-ci já existia e não era um symlink, ele fica em
 	var genKey bool
 	setup := &cobra.Command{
 		Use:   "setup",
-		Short: "Setup de servidor novo: usuário deploy, binário e chave da CI",
+		Short: "Prepara um servidor novo: usuário de deploy, instalação e chave do GitHub",
 		Long: `Cria (ou corrige) o usuário deploy, o ~/.ssh, instala o binário e,
 com --key, autoriza a chave da CI; com --generate-key, gera a chave aqui
 mesmo e grava o par em ./ci_deploy_key(.pub), na pasta atual. Idempotente:
@@ -438,5 +446,36 @@ pode rodar de novo.`,
 	setup.Flags().StringVar(&keyOut, "key-out", "", "com --generate-key: grava a chave privada neste arquivo (padrão: ./ci_deploy_key)")
 	setup.MarkFlagsMutuallyExclusive("key", "generate-key")
 	srv.AddCommand(setup, certsCmd(env), statusCmd(env), baseDomainCmd(env))
+	order(srv, "setup", "status", "domain", "certs", "install")
 	return srv
+}
+
+// grouped adds cmds to parent under group id, in this order.
+func grouped(parent *cobra.Command, id string, cmds ...*cobra.Command) {
+	for _, c := range cmds {
+		c.GroupID = id
+		parent.AddCommand(c)
+	}
+}
+
+// order re-adds parent's subcommands with names first, in that order (help
+// lists them as added; see clitext.Localize).
+func order(parent *cobra.Command, names ...string) {
+	cmds := parent.Commands()
+	parent.RemoveCommand(cmds...)
+	byName := map[string]*cobra.Command{}
+	for _, c := range cmds {
+		byName[c.Name()] = c
+	}
+	for _, n := range names {
+		if c, ok := byName[n]; ok {
+			parent.AddCommand(c)
+			delete(byName, n)
+		}
+	}
+	for _, c := range cmds {
+		if _, ok := byName[c.Name()]; ok {
+			parent.AddCommand(c)
+		}
+	}
 }

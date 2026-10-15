@@ -86,7 +86,7 @@ func updateCmd(env *Env) *cobra.Command {
 	var check bool
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Atualiza o deploy-tools para a última release do GitHub",
+		Short: "Verifica e instala a versão mais nova",
 		Long: `Baixa a última release, confere o SHA-256 publicado com ela e instala
 como o "server install" (troca atômica do binário e do deploy-ci).
 
@@ -125,4 +125,46 @@ ou a variável DEPLOY_TOOLS_NO_UPDATE=1. O deploy da CI nunca consulta nada.`,
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "só verifica, sem instalar")
 	return cmd
+}
+
+// iCheckUpdate is the TUI's "Verificar atualizações".
+func iCheckUpdate(env *Env) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	r, err := env.Updates.Latest(ctx)
+	if err != nil {
+		return err
+	}
+	env.UI.KV([2]string{"esta versão", env.Version}, [2]string{"última release", r.Version})
+	env.UI.Println()
+	if !update.Newer(env.Version, r.Version) {
+		env.UI.OK("Está na versão mais recente.")
+		return nil
+	}
+	if env.RequireRoot() != nil {
+		env.UI.Hint("Para atualizar: sudo deploy-tools update")
+		return nil
+	}
+	if !env.installState().Installed {
+		env.UI.Hint("O deploy-tools ainda não está instalado neste servidor: use \"Preparar servidor\" primeiro.")
+		return nil
+	}
+	ok, err := env.UI.ConfirmDefault("Atualizar agora para "+r.Version+"?", "Troca atômica do binário; vale a partir da próxima execução.", true)
+	if err != nil || !ok {
+		return err
+	}
+	if err := applyUpdate(env, r); err != nil {
+		return err
+	}
+	env.UpdateNote = "atualizado para " + r.Version + " (vale na próxima execução)"
+	env.UI.OK("Atualizado para %s. Saia e abra de novo para usar a versão nova.", r.Version)
+	return nil
+}
+
+// autoUpdateState describes the automatic update setting, for the TUI.
+func autoUpdateState(env *Env) string {
+	if env.AutoUpdate {
+		return "Atualização automática: ligada (verifica no máximo uma vez por dia; desligue com AUTO_UPDATE=no em /etc/deploy-tools.conf)."
+	}
+	return "Atualização automática: desligada."
 }

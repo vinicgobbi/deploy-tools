@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -71,6 +70,7 @@ func tuiApp(env *Env) tui.App {
 			return host
 		},
 		IsRoot: isRoot,
+		Notice: func() string { return nextStep(env) },
 		Sections: []tui.Section{
 			{Title: "Apps", Items: []tui.Item{
 				{
@@ -81,45 +81,18 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools app create <app> --type laravel|symfony|react|angular|static",
 				},
 				{
-					Label: "Migrar app legado", Root: true, Run: rooted(func() error { return iMigrate(env) }),
-					Desc: func() string {
-						return "Converte um app que serve direto de " + env.Paths.AppsRoot + "/<app> para o modelo de " +
-							"releases, sem tirar o site do ar: o conteúdo atual vira a primeira release e o site do " +
-							"Apache passa a apontar para ela.\n\n" +
-							apps("Precisam migrar:", needsMigration, "Nenhum app precisa migrar.")
-					},
-					CLI: "sudo deploy-tools app migrate <app> --type ...",
-				},
-				{
-					Label: "Status de um app", Run: func() error { return iStatus(env) },
-					Desc: text("Mostra o endereço, o tipo, a release no ar, as releases guardadas e o que falta " +
-						"para o app ficar no ar."),
-					CLI: "deploy-tools app status <app>",
-				},
-				{
 					Label: "Listar apps", Run: func() error { return doList(env) },
 					Desc: func() string { return tui.Capture(env.UI, func() { _ = doList(env) }) },
 					CLI:  "deploy-tools app list",
 				},
 				{
-					Label: "Rollback", Root: true, Run: rooted(func() error { return iRollback(env) }),
-					Desc: text("Volta um app para uma release anterior que ainda está em disco. Não refaz o build: " +
-						"só troca a release ativa, na hora.\n\nO próximo push publica uma release nova normalmente."),
-					CLI: "sudo deploy-tools release rollback <app> [release]",
+					Label: "Ver um app", Run: func() error { return iStatus(env) },
+					Desc: text("Mostra o endereço, o tipo, a release no ar, as releases guardadas e o que falta " +
+						"para o app ficar no ar."),
+					CLI: "deploy-tools app status <app>",
 				},
 				{
-					Label: "Configurar app", Root: true, Run: rooted(func() error { return iConfig(env) }),
-					Desc: func() string {
-						return "Grava o .deploy.conf dos apps já migrados que ainda não têm: o tipo e, no Laravel e no Symfony, " +
-							"se o deploy roda as migrations. Com ele, o deploy passa a rodar os hooks do tipo " +
-							"(storage:link e caches no Laravel, cache:clear no Symfony).\n\n" +
-							apps("Sem .deploy.conf:", needsConf, "Todos os apps migrados já têm .deploy.conf. "+
-								"Para mudar a config de um, use o comando abaixo.")
-					},
-					CLI: "sudo deploy-tools app config <app> [--type t] [--migrate-on-deploy]",
-				},
-				{
-					Label: "Ativar site", Root: true, Run: rooted(func() error { return iEnable(env) }),
+					Label: "Colocar no ar", Root: true, Run: rooted(func() error { return iEnable(env) }),
 					Desc: func() string {
 						return "Coloca no ar o site de um app (a2ensite). A config do Apache é testada antes de mexer " +
 							"e de novo depois; o Apache só recarrega se passar, senão o site é desativado de novo.\n\n" +
@@ -129,23 +102,23 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools app enable <app>",
 				},
 				{
-					Label: "Desativar site", Root: true, Run: rooted(func() error { return iDisable(env) }),
+					Label: "Tirar do ar", Root: true, Run: rooted(func() error { return iDisable(env) }),
 					Desc: func() string {
 						return "Tira do ar o site de um app (a2dissite), com as mesmas checagens do Ativar. " +
-							"Os arquivos, as releases e o deploy pela CI continuam; para voltar, use Ativar site.\n\n" +
+							"Os arquivos, as releases e o deploy pela CI continuam; para voltar, use Colocar no ar.\n\n" +
 							apps("Sites ativos:", func(a provision.AppInfo) bool { return a.Vhost != "" && a.VhostEnabled }, "Nenhum site ativo.")
 					},
 					CLI: "sudo deploy-tools app disable <app>",
 				},
 				{
-					Label: "Domínios", Root: true, Run: rooted(func() error { return iDomains(env) }),
+					Label: "Domínios do site", Root: true, Run: rooted(func() error { return iDomains(env) }),
 					Desc: text("Adiciona ou remove domínios do site de um app. O primeiro é o principal (ServerName); " +
 						"os outros viram ServerAlias.\n\nSe o certificado atual não cobrir os domínios novos, procura " +
 						"um que cubra e troca. Um site ativo é testado antes e depois, e restaurado se algo falhar."),
 					CLI: "sudo deploy-tools app domain add|remove <app> <domínio>...",
 				},
 				{
-					Label: "Certificado TLS", Root: true, Run: rooted(func() error { return iCert(env) }),
+					Label: "HTTPS do site", Root: true, Run: rooted(func() error { return iCert(env) }),
 					Desc: func() string {
 						return "Procura no servidor um certificado válido que cubra todos os domínios do site, com a " +
 							"chave correspondente, e troca no site. Use depois de emitir ou renovar (ex.: certbot).\n\n" +
@@ -156,10 +129,44 @@ func tuiApp(env *Env) tui.App {
 					},
 					CLI: "sudo deploy-tools app cert <app> [--cert arquivo --key arquivo]",
 				},
+				{
+					Label: "Voltar versão", Root: true, Run: rooted(func() error { return iRollback(env) }),
+					Desc: text("Volta um app para uma release anterior que ainda está em disco. Não refaz o build: " +
+						"só troca a release ativa, na hora.\n\nO próximo push publica uma release nova normalmente."),
+					CLI: "sudo deploy-tools release rollback <app> [release]",
+				},
+				{
+					Label: "Tipo e migrations", Root: true, Run: rooted(func() error { return iConfig(env) }),
+					Desc: func() string {
+						return "Grava o .deploy.conf dos apps já migrados que ainda não têm: o tipo e, no Laravel e no Symfony, " +
+							"se o deploy roda as migrations. Com ele, o deploy passa a rodar os hooks do tipo " +
+							"(storage:link e caches no Laravel, cache:clear no Symfony).\n\n" +
+							apps("Sem .deploy.conf:", needsConf, "Todos os apps migrados já têm .deploy.conf. "+
+								"Para mudar a config de um, use o comando abaixo.")
+					},
+					CLI: "sudo deploy-tools app config <app> [--type t] [--migrate-on-deploy]",
+				},
+				{
+					Label: "Converter site existente", Root: true, Run: rooted(func() error { return iMigrate(env) }),
+					Desc: func() string {
+						return "Converte um app que serve direto de " + env.Paths.AppsRoot + "/<app> para o modelo de " +
+							"releases, sem tirar o site do ar: o conteúdo atual vira a primeira release e o site do " +
+							"Apache passa a apontar para ela.\n\n" +
+							apps("Precisam migrar:", needsMigration, "Nenhum app precisa migrar.")
+					},
+					CLI: "sudo deploy-tools app migrate <app> --type ...",
+				},
 			}},
 			{Title: "Servidor", Items: []tui.Item{
 				{
-					Label: "Chaves da CI", Run: func() error { return doKeys(env) },
+					Label: "Preparar servidor", Root: true, Run: rooted(func() error { return iSetup(env) }),
+					Desc: text("Prepara um servidor novo: cria (ou corrige) o usuário " + env.Paths.DeployUser +
+						", instala o binário e cuida da chave da CI: gera aqui na hora (gravada em ./ci_deploy_key), " +
+						"autoriza um .pub seu ou pula. Pode rodar de novo sem problema."),
+					CLI: "sudo deploy-tools server setup [--generate-key | --key arquivo.pub]",
+				},
+				{
+					Label: "Chaves do GitHub", Run: func() error { return doKeys(env) },
 					Desc: func() string {
 						return "Chaves SSH autorizadas para o usuário " + env.Paths.DeployUser + ". Cada uma só pode " +
 							"rodar o deploy-ci, nunca abrir um shell.\n\n" + tui.Capture(env.UI, func() { _ = doKeys(env) })
@@ -167,7 +174,7 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools key list",
 				},
 				{
-					Label: "Adicionar chave", Root: true, Run: rooted(func() error { return iAddKey(env) }),
+					Label: "Gerar ou adicionar chave", Root: true, Run: rooted(func() error { return iAddKey(env) }),
 					Desc: text("Autoriza uma chave da CI, restrita ao comando de deploy. Duas opções:\n\n" +
 						"• Gerar agora, aqui: a pública é autorizada e o par é gravado em ci_deploy_key(.pub), na pasta " +
 						"de onde você abriu o deploy-tools, para o secret DEPLOY_SSH_KEY. Apague depois de cadastrar.\n" +
@@ -190,13 +197,6 @@ func tuiApp(env *Env) tui.App {
 					CLI: "deploy-tools key secrets [--host h] [--repo dono/repo | --org org]",
 				},
 				{
-					Label: "Setup de servidor", Root: true, Run: rooted(func() error { return iSetup(env) }),
-					Desc: text("Prepara um servidor novo: cria (ou corrige) o usuário " + env.Paths.DeployUser +
-						", instala o binário e cuida da chave da CI: gera aqui na hora (gravada em ./ci_deploy_key), " +
-						"autoriza um .pub seu ou pula. Pode rodar de novo sem problema."),
-					CLI: "sudo deploy-tools server setup [--generate-key | --key arquivo.pub]",
-				},
-				{
 					Label: "Domínios coringa", Root: true, Run: rooted(func() error { return iBaseDomains(env) }),
 					Desc: func() string {
 						return "Domínios base, como vinicgobbi.dev.br: ao criar um app, você escolhe um deles e o app " +
@@ -206,7 +206,7 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools server domain add|remove|list <domínio>",
 				},
 				{
-					Label: "Certificados TLS", Run: func() error { return certsCmd(env).RunE(nil, nil) },
+					Label: "Certificados HTTPS", Run: func() error { return certsCmd(env).RunE(nil, nil) },
 					Desc: text("Lista os certificados que o deploy-tools encontra no servidor e pode usar nos sites, " +
 						"com os domínios e a validade.\n\nPara fixar um certificado ou procurar em outras pastas, " +
 						"configure " + config.File + " (SSL_CERT_FILE, SSL_CERT_KEY, SSL_SEARCH_DIRS)."),
@@ -215,10 +215,19 @@ func tuiApp(env *Env) tui.App {
 			}},
 		},
 	}
+	app.Sections = append(app.Sections, tui.Section{Title: "Esta ferramenta", Items: []tui.Item{{
+		Label: "Verificar atualizações", Run: func() error { return iCheckUpdate(env) },
+		Desc: func() string {
+			return "Consulta a última release no GitHub e, se houver versão nova, oferece instalar " +
+				"(com sudo). O download é conferido pelo SHA-256 publicado na release.\n\n" +
+				"Esta versão: " + env.Version + ".\n" + autoUpdateState(env)
+		},
+		CLI: "sudo deploy-tools update  |  deploy-tools update --check",
+	}}})
 	// Called by name, it is the installed binary (kept up to date by the
 	// automatic update): installing makes sense only for a loose copy.
 	if !env.FromPATH {
-		srv := &app.Sections[len(app.Sections)-1]
+		srv := &app.Sections[len(app.Sections)-2] // Servidor
 		install := tui.Item{
 			Label: "Instalar/atualizar", Root: true, Run: rooted(func() error { return iInstall(env) }),
 			Desc: func() string {
@@ -230,7 +239,7 @@ func tuiApp(env *Env) tui.App {
 			},
 			CLI: "sudo deploy-tools server install",
 		}
-		srv.Items = slices.Insert(srv.Items, 3, install)
+		srv.Items = append(srv.Items, install)
 	}
 	return app
 }
@@ -569,3 +578,35 @@ func fileExists(s string) error {
 }
 
 func yesNo(b bool) string { return map[bool]string{true: "sim", false: "não"}[b] }
+
+// nextStep is the TUI's notice line: what to do next on this server, in
+// the order a new server needs it. It runs on every redraw: no network,
+// no subprocess.
+func nextStep(env *Env) string {
+	if env.RequireRoot() != nil {
+		return ""
+	}
+	if !env.P.DeployUserExists() || !fileExistsAt(env.Paths.BinaryPath()) {
+		return "Servidor ainda não preparado: comece por \"Preparar servidor\"."
+	}
+	if s := env.P.Secrets(""); s.CIKeys != nil && len(s.CIKeys) == 0 {
+		return "Nenhuma chave do GitHub ainda: use \"Gerar ou adicionar chave\" para os repositórios poderem publicar."
+	}
+	apps, _ := listApps(env)
+	if len(apps) == 0 {
+		return "Nenhum app ainda: crie o primeiro em \"Criar app\"."
+	}
+	for _, a := range apps {
+		switch {
+		case needsMigration(a):
+			return a.Name + " serve sem versões (sem deploy pela CI): veja \"Converter site existente\"."
+		case a.Vhost != "" && !a.VhostEnabled:
+			return "O site de " + a.Name + " está fora do ar: quando DNS e certificado estiverem prontos, use \"Colocar no ar\"."
+		case a.Vhost != "" && a.CertFile == "":
+			return a.Name + " está só em HTTP: instale um certificado e use \"HTTPS do site\"."
+		}
+	}
+	return ""
+}
+
+func fileExistsAt(p string) bool { _, err := os.Stat(p); return err == nil }

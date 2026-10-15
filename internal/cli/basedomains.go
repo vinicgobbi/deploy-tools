@@ -181,7 +181,7 @@ func syncPaths(env *Env) { env.Paths = env.P.Paths }
 func baseDomainCmd(env *Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
-		Short: "Domínios coringa: base para o endereço dos apps (<app>.<domínio>)",
+		Short: "Domínios coringa: os apps novos ganham <nome>.<domínio>",
 		Long: `Cadastra domínios base (coringa), como vinicgobbi.dev.br. Ao criar um app
 sem --domain, ele ganha <subdomínio>.<domínio base>: com um só cadastrado,
 ele é usado direto; com vários, o deploy-tools pergunta qual usar (ou use

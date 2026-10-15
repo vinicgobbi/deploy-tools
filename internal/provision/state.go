@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -166,4 +167,13 @@ func ValidateHost(host string) error {
 		return nil // single-label hostname, e.g. on a private network
 	}
 	return fmt.Errorf("endereço inválido: %q (use um hostname ou um IP)", host)
+}
+
+// DeployUserExists reports whether the deploy user was created (setup).
+func (p *Provisioner) DeployUserExists() bool {
+	if p.UserExists != nil {
+		return p.UserExists(p.Paths.DeployUser)
+	}
+	_, err := user.Lookup(p.Paths.DeployUser)
+	return err == nil
 }

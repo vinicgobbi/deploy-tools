@@ -184,7 +184,7 @@ func installCmd(env *Env) *cobra.Command {
 	var addPath, noPath bool
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Instala o deploy-dev no PATH do usuário (sem admin)",
+		Short: "Instala o deploy-dev no seu PATH (sem admin)",
 		Long: `Copia este binário para uma pasta de programas do usuário e garante que
 ela está no PATH:
 

@@ -25,11 +25,18 @@ São dois binários Go:
     do `SSH_ORIGINAL_COMMAND`.
   - **CLI de operação.** Rode `sudo deploy-tools` sem argumentos para abrir a
     interface de tela cheia, ou use os comandos abaixo. As ações ficam num
-    menu à esquerda (Apps e Servidor). O painel à direita explica a ação
-    selecionada, com o contexto atual e o comando equivalente. `↑↓` navega,
-    `enter` abre, `esc` cancela e `q` sai. Sem `sudo`, a interface serve só
-    para consulta. Com `ACCESSIBLE=1`, as mesmas ações aparecem num menu de
+    menu à esquerda (Apps, Servidor e Esta ferramenta), na ordem de uso. O
+    painel à direita explica a ação selecionada, com o contexto atual e o
+    comando equivalente. Sob o título, uma linha mostra **o próximo passo**
+    do servidor (prepará-lo, cadastrar a chave do GitHub, criar o primeiro
+    app, colocar um site no ar, ativar o HTTPS...). `↑↓` navega, `enter`
+    abre, `esc` cancela e `q` sai. Sem `sudo`, a interface serve só para
+    consulta. Com `ACCESSIBLE=1`, as mesmas ações aparecem num menu de
     linhas numeradas, próprio para leitores de tela.
+
+  Toda a ajuda (`--help`) e as mensagens de erro estão em português. Um
+  comando digitado errado traz a sugestão do certo (`deploy-tools sever` →
+  "Você quis dizer: server?").
 - **`deploy-dev`**, na máquina dos desenvolvedores: gera e valida o
   `.github/workflows/deploy.yml` de cada projeto (veja
   [deploy-dev](#deploy-dev-configurar-o-deploy-de-um-projeto)).
@@ -88,7 +95,8 @@ scp deploy-tools-linux-amd64 ci_deploy_key.pub usuario@servidor:/tmp/
 ssh usuario@servidor 'chmod +x /tmp/deploy-tools-linux-amd64 && sudo /tmp/deploy-tools-linux-amd64 server setup --key /tmp/ci_deploy_key.pub'
 ```
 
-Na TUI, o "Setup de servidor" e o "Adicionar chave" oferecem as duas opções.
+Na TUI, o "Preparar servidor" e o "Gerar ou adicionar chave" oferecem as
+duas opções.
 
 O `server setup` é idempotente e faz o seguinte:
 
@@ -126,7 +134,7 @@ instalam. A versão nova vale a partir da próxima execução.
   root, só avisa. O forced command da CI nunca consulta nada.
 - **deploy-dev**: atualiza a cópia instalada no PATH do usuário.
 - Na mão: `sudo deploy-tools update` e `deploy-dev update` (`--check` só
-  verifica).
+  verifica), ou o item **Verificar atualizações** nos menus dos dois.
 - Para desligar: `AUTO_UPDATE=no` no `/etc/deploy-tools.conf`, ou as
   variáveis `DEPLOY_TOOLS_NO_UPDATE=1` e `DEPLOY_DEV_NO_UPDATE=1`. Builds de
   desenvolvimento (`dev`, `-dirty`) nunca se atualizam.
