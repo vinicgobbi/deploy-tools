@@ -1,3 +1,9 @@
+## v0.7.0 (2026-10-15)
+
+### Feat
+
+- **cli**: pergunta o DEPLOY_HOST no setup e gera script de secrets por repositório
+
 ## v0.6.0 (2026-10-15)
 
 ### Feat
