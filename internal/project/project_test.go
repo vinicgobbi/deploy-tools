@@ -164,7 +164,7 @@ func TestLaravelPackageStepIsValidShell(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range doc.Jobs["release-and-deploy"].Steps {
+	for _, s := range doc.Jobs["build"].Steps {
 		if s.Run == "" {
 			continue
 		}

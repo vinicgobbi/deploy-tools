@@ -24,6 +24,9 @@ var (
 	PnpmSetup   = Pin{"pnpm/action-setup", "b906affcce14559ad1aafd4ab0e942779e9f58b1", "v4.3.0"}
 	SetupPHP    = Pin{"shivammathur/setup-php", "f3e473d116dcccaddc5834248c87452386958240", "2.37.2"}
 	Commitizen  = Pin{"commitizen-tools/commitizen-action", "338bbd841b75aaee6bf5340e1fa12f6ab58ff9ff", "0.27.1"}
+	// Carry the package from the build job to the deploy job.
+	UploadArtifact   = Pin{"actions/upload-artifact", "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "v7.0.1"}
+	DownloadArtifact = Pin{"actions/download-artifact", "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8.0.1"}
 )
 
 // DeployToolsRepo hosts the composite deploy action (action.yml).

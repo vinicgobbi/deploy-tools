@@ -566,7 +566,26 @@ O `init` detecta:
 - **PHP:** versão (do `composer.json`) e Pint.
 
 Num projeto que já faz deploy, o `APP_NAME` existente é mantido. O workflow
-gerado tem:
+gerado é dividido em jobs, que aparecem como etapas no GitHub Actions:
+
+```
+validate ─▶ release ─▶ build ─▶ deploy
+```
+
+- **validate**: lint, Pint e `php -l`. Só existe quando o projeto tem algo
+  a validar.
+- **release**: bump com Commitizen e release no GitHub. Só quando o projeto
+  usa Commitizen; a versão segue para os próximos jobs.
+- **build**: monta o `release.tar.gz`, a partir da tag do bump quando houve
+  um. O pacote segue para o deploy como artefato.
+- **deploy**: baixa o artefato, publica no servidor e **apaga o artefato**.
+  Se o deploy falhar, o artefato expira em 1 dia.
+
+Um `concurrency` garante um deploy por vez na branch. Como cada job roda
+numa máquina nova, as dependências são instaladas no validate e de novo no
+build.
+
+O workflow também tem:
 
 - actions fixadas por SHA, com a versão comentada;
 - permissões mínimas do `GITHUB_TOKEN` (`contents: read`, ou `write` com

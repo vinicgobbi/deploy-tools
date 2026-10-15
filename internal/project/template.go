@@ -15,6 +15,10 @@ var workflowTmpl = template.Must(template.New("deploy").Delims("[[", "]]").Funcs
 	"join": strings.Join,
 }).Parse(`# Gerado por deploy-dev [[.ActionVersion]] (deploy-dev init). Pode editar à
 # vontade; rode "deploy-dev check" para validar contra as convenções.
+#
+# Etapas: [[.Stages]].
+# Cada job roda numa máquina nova: o pacote vai do build para o deploy como
+# artefato, apagado logo depois do deploy.
 name: Release and deploy
 
 on:
@@ -22,42 +26,34 @@ on:
     branches:
       - [[.Branch]]
 
+# Um deploy por vez nesta branch: um push novo espera o anterior terminar.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   APP_NAME: [[.App]]
 
 jobs:
-[[- if .Commitizen]]
-  # Um job só: valida, versiona (Commitizen) e publica a partir do mesmo
-  # checkout. O commit "bump:" e a tag são enviados com o GITHUB_TOKEN, que
-  # não dispara outro workflow; o "if" protege caso troque por um PAT.
-[[- end]]
-  release-and-deploy:
+[[- if .Validates]]
+  validate:
     runs-on: ubuntu-latest
 [[- if .Commitizen]]
     if: "!startsWith(github.event.head_commit.message, 'bump:')"
 [[- end]]
-
     permissions:
-      contents: [[if .Commitizen]]write[[else]]read[[end]]
+      contents: read
 [[- if .PrivateRegistry]]
       packages: read
 [[- end]]
 
     steps:
       - uses: [[.Pin.Checkout]]
-[[- if .Commitizen]]
-        with:
-          fetch-depth: 0
-[[- end]]
 [[- if .IsPHP]]
-
-      - uses: [[.Pin.SetupPHP]]
-        with:
-          php-version: "[[.PHPVersion]]"
-          coverage: none
+[[- template "php-setup" .]]
 
       # O servidor tem as extensões de produção; o runner só precisa
-      # validar e montar o vendor/, sem executar a aplicação.
+      # validar, sem executar a aplicação.
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist --ignore-platform-req='ext-*'[[if eq .Type "symfony"]] --no-scripts[[end]]
 [[- if .PHPDirs]]
@@ -71,48 +67,35 @@ jobs:
         run: vendor/bin/pint --test
 [[- end]]
 [[- end]]
-[[- if .NeedsNode]]
-[[- if eq .PackageManager "pnpm"]]
-
-      - uses: [[.Pin.PnpmSetup]]
-        with:
-          version: [[.PnpmVersion]]
-[[- end]]
-
-      - uses: [[.Pin.SetupNode]]
-        with:
-          node-version: "[[.NodeVersion]]"
-[[- if .PrivateRegistry]]
-
-      # GitHub Packages (npm.pkg.github.com). O token vai no ~/.npmrc do
-      # runner, fora do repositório: o "cz bump" faz "git commit -a" e
-      # levaria o token junto num .npmrc versionado.
-      - name: Configure registry auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" >> "$HOME/.npmrc"
-[[- end]]
-
-      - name: Install Node dependencies
-        run: [[.NodeInstall]]
-[[- if and .Lint .IsSPA]]
+[[- if .NodeLint]]
+[[- template "node-setup" .]]
 
       - name: Lint
         run: [[.NodeRun]] lint
 [[- end]]
 [[- end]]
-[[- if eq .Type "static"]]
-[[- if .MkDocs]]
-
-      - uses: [[.Pin.SetupPython]]
-        with:
-          python-version: "[[.PythonVersion]]"
-
-      - name: Install dependencies
-        run: [[if .Requirements]]pip install -r requirements.txt[[else]]pip install mkdocs[[end]]
-[[- end]]
-[[- end]]
 [[- if .Commitizen]]
+
+  # Versiona (Commitizen) e cria a release no GitHub. O commit "bump:" e a
+  # tag vão com o GITHUB_TOKEN, que não dispara outro workflow; o "if"
+  # protege caso troque por um PAT.
+  release:
+[[- if .Validates]]
+    needs: validate
+[[- else]]
+    if: "!startsWith(github.event.head_commit.message, 'bump:')"
+[[- end]]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.cz.outputs.version }}
+      bumped: ${{ steps.cz.outputs.previous_version != steps.cz.outputs.next_version }}
+
+    steps:
+      - uses: [[.Pin.Checkout]]
+        with:
+          fetch-depth: 0
 
       - name: Bump version with Commitizen
         id: cz
@@ -131,7 +114,56 @@ jobs:
           TAG: v${{ steps.cz.outputs.version }}
         run: gh release create "$TAG" --title "$TAG" --notes-file body.md --verify-tag
 [[- end]]
-[[- if .BuildsVite]]
+
+  build:
+[[- if .Commitizen]]
+    needs: release
+[[- else if .Validates]]
+    needs: validate
+[[- end]]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+[[- if .PrivateRegistry]]
+      packages: read
+[[- end]]
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+
+    steps:
+      - uses: [[.Pin.Checkout]]
+[[- if .Commitizen]]
+        with:
+          # A tag criada pelo bump (com o CHANGELOG), ou o commit do push.
+          ref: ${{ needs.release.outputs.bumped == 'true' && format('v{0}', needs.release.outputs.version) || github.sha }}
+[[- end]]
+[[- if .IsPHP]]
+[[- template "php-setup" .]]
+
+      # Só as dependências de produção, com o autoload otimizado.
+      - name: Install dependencies
+[[- if eq .Type "symfony"]]
+        env:
+          APP_ENV: prod
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --no-scripts --ignore-platform-req='ext-*'
+
+      # O cache (var/cache) é gerado no servidor, no caminho da release; aqui
+      # só os arquivos públicos dos bundles[[if .AssetMapper]] e o AssetMapper[[end]].
+      - name: Build public assets
+        env:
+          APP_ENV: prod
+          APP_DEBUG: "0"
+        run: |
+          php bin/console assets:install public --no-interaction
+[[- if .AssetMapper]]
+          php bin/console asset-map:compile
+[[- end]]
+[[- else]]
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --ignore-platform-req='ext-*'
+[[- end]]
+[[- end]]
+[[- if .NeedsNode]]
+[[- template "node-setup" .]]
 
       - name: Build
 [[- if .ViteVars]]
@@ -155,37 +187,19 @@ jobs:
 [[- if eq .Type "static"]]
 [[- if .MkDocs]]
 
+      - uses: [[.Pin.SetupPython]]
+        with:
+          python-version: "[[.PythonVersion]]"
+
+      - name: Install dependencies
+        run: [[if .Requirements]]pip install -r requirements.txt[[else]]pip install mkdocs[[end]]
+
       - name: Build site
         run: mkdocs build --strict --site-dir [[.OutputDir]]
 [[- else if .BuildCommand]]
 
       - name: Build
         run: [[.BuildCommand]]
-[[- end]]
-[[- end]]
-[[- if .IsPHP]]
-
-      # Reaproveita o vendor/ já baixado: remove os pacotes de dev e
-      # regenera o autoload otimizado.
-      - name: Prune dev dependencies
-[[- if eq .Type "symfony"]]
-        env:
-          APP_ENV: prod
-        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --no-scripts --ignore-platform-req='ext-*'
-
-      # O cache (var/cache) é gerado no servidor, no caminho da release; aqui
-      # só os arquivos públicos dos bundles[[if .AssetMapper]] e o AssetMapper[[end]].
-      - name: Build public assets
-        env:
-          APP_ENV: prod
-          APP_DEBUG: "0"
-        run: |
-          php bin/console assets:install public --no-interaction
-[[- if .AssetMapper]]
-          php bin/console asset-map:compile
-[[- end]]
-[[- else]]
-        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --ignore-platform-req='ext-*'
 [[- end]]
 [[- end]]
 
@@ -201,6 +215,31 @@ jobs:
         run: tar -czf "$RUNNER_TEMP/release.tar.gz" -C [[.OutputDir]] [[if eq .OutputDir "."]]--exclude=./.git --exclude=./.github [[end]].
 [[- end]]
 
+      # Leva o pacote ao job de deploy, que o apaga depois de publicar (se o
+      # deploy falhar, ele expira em 1 dia).
+      - name: Upload package
+        id: upload
+        uses: [[.Pin.UploadArtifact]]
+        with:
+          name: release
+          path: ${{ runner.temp }}/release.tar.gz
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  deploy:
+    needs: [[if .Commitizen]][build, release][[else]]build[[end]]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # apagar o artefato depois do deploy
+
+    steps:
+      - name: Download package
+        uses: [[.Pin.DownloadArtifact]]
+        with:
+          name: release
+          path: ${{ runner.temp }}
+
       # Gera o release id (timestamp + sufixo), monta a chave num diretório
       # temporário e envia o tarball ao deploy-ci do servidor.
       - name: Deploy
@@ -209,12 +248,48 @@ jobs:
           app: ${{ env.APP_NAME }}
           archive: ${{ runner.temp }}/release.tar.gz
 [[- if .Commitizen]]
-          release-suffix: v${{ steps.cz.outputs.version }}
+          release-suffix: v${{ needs.release.outputs.version }}
 [[- end]]
           host: ${{ secrets.DEPLOY_HOST }}
           user: ${{ secrets.DEPLOY_USER }}
           ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
           host-key: ${{ secrets.DEPLOY_HOST_KEY }}
+
+      - name: Delete package artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/${{ needs.build.outputs.artifact-id }}"
+[[- define "php-setup"]]
+
+      - uses: [[.Pin.SetupPHP]]
+        with:
+          php-version: "[[.PHPVersion]]"
+          coverage: none
+[[- end]]
+[[- define "node-setup"]]
+[[- if eq .PackageManager "pnpm"]]
+
+      - uses: [[.Pin.PnpmSetup]]
+        with:
+          version: [[.PnpmVersion]]
+[[- end]]
+
+      - uses: [[.Pin.SetupNode]]
+        with:
+          node-version: "[[.NodeVersion]]"
+[[- if .PrivateRegistry]]
+
+      # GitHub Packages (npm.pkg.github.com). O token vai no ~/.npmrc do
+      # runner, fora do repositório.
+      - name: Configure registry auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '\n//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" >> "$HOME/.npmrc"
+[[- end]]
+
+      - name: Install Node dependencies
+        run: [[.NodeInstall]]
+[[- end]]
 `))
 
 type tmplData struct {
@@ -223,10 +298,27 @@ type tmplData struct {
 	DeployToolsRepo string
 }
 
-func (d tmplData) IsPHP() bool      { return d.Type == Laravel || d.Type == Symfony }
-func (d tmplData) IsSPA() bool      { return d.Type == React || d.Type == Angular }
-func (d tmplData) NeedsNode() bool  { return d.IsSPA() || (d.IsPHP() && d.ViteAssets) }
-func (d tmplData) BuildsVite() bool { return d.NeedsNode() }
+func (d tmplData) IsPHP() bool     { return d.Type == Laravel || d.Type == Symfony }
+func (d tmplData) IsSPA() bool     { return d.Type == React || d.Type == Angular }
+func (d tmplData) NeedsNode() bool { return d.IsSPA() || (d.IsPHP() && d.ViteAssets) }
+func (d tmplData) NodeLint() bool  { return d.Lint && d.IsSPA() }
+
+// Validates: there is something to check before versioning and building.
+func (d tmplData) Validates() bool {
+	return (d.IsPHP() && (len(d.PHPDirs) > 0 || d.Pint)) || d.NodeLint()
+}
+
+// Stages names the jobs in order, for the header comment.
+func (d tmplData) Stages() string {
+	var st []string
+	if d.Validates() {
+		st = append(st, "validate")
+	}
+	if d.Commitizen {
+		st = append(st, "release")
+	}
+	return strings.Join(append(st, "build", "deploy"), " → ")
+}
 
 func (d tmplData) NodeInstall() string {
 	if d.PackageManager == "pnpm" {
@@ -303,7 +395,7 @@ func Render(o Options) (string, error) {
 		Pin: map[string]string{
 			"Checkout": Checkout.Uses(), "SetupPython": SetupPython.Uses(), "SetupNode": SetupNode.Uses(),
 			"PnpmSetup": PnpmSetup.Uses(), "SetupPHP": SetupPHP.Uses(),
-			"Commitizen": Commitizen.Uses(),
+			"Commitizen": Commitizen.Uses(), "UploadArtifact": UploadArtifact.Uses(), "DownloadArtifact": DownloadArtifact.Uses(),
 		},
 	}
 	var buf bytes.Buffer

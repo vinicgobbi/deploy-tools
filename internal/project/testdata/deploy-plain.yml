@@ -1,5 +1,9 @@
 # Gerado por deploy-dev v1.2.0 (deploy-dev init). Pode editar à
 # vontade; rode "deploy-dev check" para validar contra as convenções.
+#
+# Etapas: build → deploy.
+# Cada job roda numa máquina nova: o pacote vai do build para o deploy como
+# artefato, apagado logo depois do deploy.
 name: Release and deploy
 
 on:
@@ -7,21 +11,53 @@ on:
     branches:
       - main
 
+# Um deploy por vez nesta branch: um push novo espera o anterior terminar.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   APP_NAME: site
 
 jobs:
-  release-and-deploy:
-    runs-on: ubuntu-latest
 
+  build:
+    runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Package release
         run: tar -czf "$RUNNER_TEMP/release.tar.gz" -C . --exclude=./.git --exclude=./.github .
+
+      # Leva o pacote ao job de deploy, que o apaga depois de publicar (se o
+      # deploy falhar, ele expira em 1 dia).
+      - name: Upload package
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release
+          path: ${{ runner.temp }}/release.tar.gz
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # apagar o artefato depois do deploy
+
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: ${{ runner.temp }}
 
       # Gera o release id (timestamp + sufixo), monta a chave num diretório
       # temporário e envia o tarball ao deploy-ci do servidor.
@@ -34,3 +70,8 @@ jobs:
           user: ${{ secrets.DEPLOY_USER }}
           ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
           host-key: ${{ secrets.DEPLOY_HOST_KEY }}
+
+      - name: Delete package artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/${{ needs.build.outputs.artifact-id }}"
