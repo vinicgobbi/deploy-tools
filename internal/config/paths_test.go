@@ -78,3 +78,23 @@ func TestSetBaseDomains(t *testing.T) {
 		t.Fatalf("mode = %v", fi.Mode().Perm())
 	}
 }
+
+func TestSetDeployHost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "deploy-tools.conf")
+	if err := SetBaseDomains(path, []string{"example.com"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDeployHost(path, "179.199.156.62"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDeployHost(path, "deploy.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil || p.DeployHost != "deploy.example.com" || p.BaseDomains[0] != "example.com" {
+		t.Fatalf("Load = %+v %v", p, err)
+	}
+	if b, _ := os.ReadFile(path); strings.Count(string(b), "DEPLOY_HOST=") != 1 {
+		t.Fatalf("duplicated:\n%s", b)
+	}
+}

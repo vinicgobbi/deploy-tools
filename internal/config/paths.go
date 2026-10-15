@@ -166,6 +166,27 @@ func NormalizeBase(d string) string {
 // BASE_DOMAINS/DOMAIN_SUFFIX/BASE_CERT lines and keeping every other line
 // (comments included). The file is created when missing.
 func SetBaseDomains(path string, domains []string, certs map[string]CertFiles) error {
+	value := []string{"BASE_DOMAINS=" + strings.Join(domains, ",")}
+	for _, d := range domains {
+		if c, ok := certs[d]; ok && c.File != "" {
+			value = append(value, strings.TrimSpace("BASE_CERT="+d+" "+c.File+" "+c.Key+" "+c.Chain))
+		}
+	}
+	return rewrite(path, []string{"BASE_DOMAINS", "DOMAIN_SUFFIX", "BASE_CERT"}, value,
+		"# Domínios coringa: os apps ganham <subdomínio>.<domínio>")
+}
+
+// SetDeployHost writes DEPLOY_HOST (how the CI reaches this server).
+func SetDeployHost(path, host string) error {
+	return rewrite(path, []string{"DEPLOY_HOST"}, []string{"DEPLOY_HOST=" + host},
+		"# Endereço pelo qual o runner do GitHub alcança o servidor (secret DEPLOY_HOST)")
+}
+
+// rewrite replaces, in the config file at path, every line whose key is in
+// keys with value (at the place of the first one), keeping every other
+// line. Without such lines, value is appended under comment. The file is
+// created when missing and keeps its mode otherwise.
+func rewrite(path string, keys, value []string, comment string) error {
 	var lines []string
 	b, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -176,16 +197,9 @@ func SetBaseDomains(path string, domains []string, certs map[string]CertFiles) e
 		mode = fi.Mode().Perm()
 	}
 	replaced := false
-	value := []string{"BASE_DOMAINS=" + strings.Join(domains, ",")}
-	for _, d := range domains {
-		if c, ok := certs[d]; ok && c.File != "" {
-			value = append(value, strings.TrimSpace("BASE_CERT="+d+" "+c.File+" "+c.Key+" "+c.Chain))
-		}
-	}
 	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
 		key, _, _ := strings.Cut(strings.TrimSpace(line), "=")
-		switch strings.TrimSpace(key) {
-		case "BASE_DOMAINS", "DOMAIN_SUFFIX", "BASE_CERT":
+		if slices.Contains(keys, strings.TrimSpace(key)) {
 			if !replaced {
 				lines = append(lines, value...)
 				replaced = true
@@ -200,7 +214,7 @@ func SetBaseDomains(path string, domains []string, certs map[string]CertFiles) e
 		if len(lines) == 0 {
 			lines = append(lines, "# deploy-tools (veja o README)")
 		}
-		lines = append(append(lines, "# Domínios coringa: os apps ganham <subdomínio>.<domínio>"), value...)
+		lines = append(append(lines, comment), value...)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

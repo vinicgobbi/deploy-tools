@@ -1,12 +1,16 @@
 package provision
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/run"
+	"github.com/vinicgobbi/deploy-tools/internal/validate"
 )
 
 // InstallState says whether the running binary is the installed one or a
@@ -98,4 +102,68 @@ func hostKeyRank(f string) int {
 		}
 	}
 	return 9
+}
+
+// HostCandidate is an address the CI might use to reach this server.
+type HostCandidate struct{ Value, Label string }
+
+// HostCandidates lists the machine's hostname and its global unicast IPs
+// (IPv4 first), labeled by interface. Behind NAT the public IP is not on
+// any interface, so callers must also offer typing one.
+func HostCandidates() []HostCandidate {
+	var out []HostCandidate
+	if h, err := os.Hostname(); err == nil && h != "" {
+		out = append(out, HostCandidate{h, "hostname"})
+	}
+	ifaces, _ := net.Interfaces()
+	var v4, v6 []HostCandidate
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok || !ipn.IP.IsGlobalUnicast() {
+				continue
+			}
+			label := "IP de " + ifc.Name
+			if ipn.IP.IsPrivate() {
+				label += " (privado — só se a CI estiver na mesma rede)"
+			}
+			if ipn.IP.To4() != nil {
+				v4 = append(v4, HostCandidate{ipn.IP.String(), label})
+			} else {
+				v6 = append(v6, HostCandidate{ipn.IP.String(), label})
+			}
+		}
+	}
+	return append(append(out, v4...), v6...)
+}
+
+// SetDeployHost saves how the CI reaches this server (DEPLOY_HOST).
+func (p *Provisioner) SetDeployHost(host string) error {
+	if err := ValidateHost(host); err != nil {
+		return err
+	}
+	if err := config.SetDeployHost(p.Paths.ConfigFile, host); err != nil {
+		return err
+	}
+	p.Paths.DeployHost = host
+	p.say("DEPLOY_HOST=%s gravado em %s.", host, p.Paths.ConfigFile)
+	return nil
+}
+
+// ValidateHost accepts a hostname or an IP address.
+func ValidateHost(host string) error {
+	if net.ParseIP(host) != nil {
+		return nil
+	}
+	if host != "" && validate.Domain(host) == nil {
+		return nil
+	}
+	if host != "" && !strings.ContainsAny(host, " ./:") && validate.AppName(host) == nil {
+		return nil // single-label hostname, e.g. on a private network
+	}
+	return fmt.Errorf("endereço inválido: %q (use um hostname ou um IP)", host)
 }

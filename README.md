@@ -49,13 +49,31 @@ chmod +x deploy-tools-linux-amd64
 sudo ./deploy-tools-linux-amd64 server setup --generate-key
 ```
 
+Primeiro, o setup pergunta **como o GitHub vai acessar o servidor**: o
+hostname, um dos IPs das interfaces ou outro endereço digitado (o IP público,
+quando o servidor está atrás de NAT, ou um DNS). Isso importa porque o valor
+vira o secret `DEPLOY_HOST` e também a linha do `known_hosts` em
+`DEPLOY_HOST_KEY`: o SSH só aceita o host key pelo mesmo nome ou IP usado na
+conexão. A resposta fica em `DEPLOY_HOST` no `/etc/deploy-tools.conf`. Em
+scripts, use `--host <endereço>`.
+
 Com `--generate-key`, a chave pública é autorizada na hora e o par é gravado
 **na pasta de onde você chamou o comando**: `ci_deploy_key` (modo 600) e
 `ci_deploy_key.pub`, ou `ci_deploy_key-2`… se já existir (nunca
 sobrescreve). Com `sudo`, os arquivos ficam com o seu usuário, então o `gh`
 rodando como você consegue ler. Os comandos `gh secret set` mostrados no fim
-já apontam para o caminho absoluto da chave. Depois de cadastrar o secret,
-apague os arquivos.
+já apontam para o caminho absoluto da chave. Ao lado dela, fica também o
+`github-secrets.sh`, que cadastra os quatro secrets no repositório que você
+passar:
+
+```bash
+sh github-secrets.sh vinicgobbi/website                 # usa a chave gravada ao lado
+sh github-secrets.sh --org acme                         # secrets da organização
+sh github-secrets.sh vinicgobbi/website ~/ci_deploy_key # chave em outro lugar
+```
+
+O script roda em qualquer máquina com o `gh` logado. Depois de cadastrar os
+secrets, apague a chave privada e o script.
 
 Para escolher outro lugar, use `--key-out arquivo`. Para gerar outra chave
 depois, rode `sudo deploy-tools key generate`; com `--print-only`, nada é
@@ -278,7 +296,7 @@ deploy-tools key generate [--out arquivo | --print-only] [--comment c]
 deploy-tools key list
 deploy-tools key secrets [--host h] [--repo dono/repo | --org org]
 deploy-tools server install
-deploy-tools server setup [--generate-key [--key-out arquivo] | --key arquivo.pub]
+deploy-tools server setup [--host h] [--generate-key [--key-out arquivo] | --key arquivo.pub]
 deploy-tools server certs
 deploy-tools server domain list|add|remove [domínio]... [--cert c --key k [--chain b]]
 deploy-tools server status                      # instalado ou rodando solto?
@@ -446,7 +464,8 @@ deploy-tools key secrets                         # ou o item "Secrets do GitHub"
 deploy-tools key secrets --repo acme/site        # já com os comandos gh secret set do repositório
 deploy-tools key secrets --org acme              # secrets da organização, para vários repositórios
 deploy-tools key secrets --copy                  # copia os comandos gh para a área de transferência
-deploy-tools key secrets --gh-only > secrets.sh  # só os comandos, sem formatação
+deploy-tools key secrets --gh-only               # só os comandos, sem formatação
+deploy-tools key secrets --script > github-secrets.sh   # script: sh github-secrets.sh dono/repo [chave]
 ```
 
 Na TUI, a seleção com o mouse pega pedaços do menu ao lado. Por isso, depois
@@ -454,8 +473,9 @@ dos secrets (e da chave privada, quando ela é gerada no servidor), aparece a
 opção de **copiar**. A cópia usa OSC 52, uma sequência que pede ao *seu*
 terminal para guardar o texto, e funciona por SSH. Se o seu terminal não
 aceitar (por exemplo, tmux sem `set-clipboard on`), use **Salvar num
-arquivo**: os comandos vão para `github-secrets.sh`, na pasta atual (modo
-600), para você rodar com `sh` depois de sair, onde o `gh` estiver logado.
+arquivo**: o script vai para `github-secrets.sh`, na pasta atual (modo 600),
+para você rodar depois de sair com `sh github-secrets.sh dono/repo`, onde o
+`gh` estiver logado.
 
 O comando lê `DEPLOY_HOST_KEY` das host keys do próprio servidor
 (`/etc/ssh/ssh_host_*_key.pub`), mostra as chaves da CI autorizadas (para

@@ -173,9 +173,12 @@ func tuiApp(env *Env) tui.App {
 				},
 				{
 					Label: "Secrets do GitHub", Run: func() error {
+						if err := ensureDeployHost(env, false); err != nil {
+							return err
+						}
 						s := env.P.Secrets("")
 						printSecrets(env, s, "", secretsTarget{})
-						return offerCopy(env, ghCommands(s, "", secretsTarget{}))
+						return offerCopy(env, ghCommands(s, "", secretsTarget{}), ghScript(s, ""))
 					},
 					Desc: text("Mostra de novo como devem ficar os secrets dos repositórios no GitHub " +
 						"(DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_HOST_KEY), com os valores deste servidor " +
@@ -503,10 +506,13 @@ func iAddKey(env *Env) error {
 	if err := env.P.AddKey(path); err != nil {
 		return err
 	}
+	if err := ensureDeployHost(env, false); err != nil {
+		return err
+	}
 	env.UI.Println()
 	s := env.P.Secrets("")
 	printSecrets(env, s, privateKeyName(path), secretsTarget{})
-	return offerCopy(env, ghCommands(s, privateKeyName(path), secretsTarget{}))
+	return offerCopy(env, ghCommands(s, privateKeyName(path), secretsTarget{}), ghScript(s, privateKeyName(path)))
 }
 
 func iInstall(env *Env) error {
@@ -527,6 +533,9 @@ func iSetup(env *Env) error {
 		return err
 	}
 	env.install = nil
+	if err := ensureDeployHost(env, true); err != nil {
+		return err
+	}
 	env.UI.OK("Servidor pronto.")
 	switch choice {
 	case "generate":
@@ -535,7 +544,7 @@ func iSetup(env *Env) error {
 		env.UI.Println()
 		s := env.P.Secrets("")
 		printSecrets(env, s, privateKeyName(path), secretsTarget{})
-		return offerCopy(env, ghCommands(s, privateKeyName(path), secretsTarget{}))
+		return offerCopy(env, ghCommands(s, privateKeyName(path), secretsTarget{}), ghScript(s, privateKeyName(path)))
 	}
 	return nil
 }

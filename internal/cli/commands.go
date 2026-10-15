@@ -339,6 +339,9 @@ Gere o par na sua máquina (não no servidor):
 			if err := env.P.AddKey(args[0]); err != nil {
 				return err
 			}
+			if err := ensureDeployHost(env, false); err != nil {
+				return err
+			}
 			env.UI.Println()
 			printSecrets(env, env.P.Secrets(""), privateKeyName(args[0]), secretsTarget{})
 			return nil
@@ -381,7 +384,7 @@ Se deploy-ci já existia e não era um symlink, ele fica em
 			return nil
 		},
 	})
-	var key, keyOut string
+	var key, keyOut, host string
 	var genKey bool
 	setup := &cobra.Command{
 		Use:   "setup",
@@ -398,6 +401,14 @@ pode rodar de novo.`,
 				return err
 			}
 			if err := env.P.Setup(env.Self, key); err != nil {
+				return err
+			}
+			if host != "" {
+				if err := env.P.SetDeployHost(host); err != nil {
+					return err
+				}
+				syncPaths(env)
+			} else if err := ensureDeployHost(env, true); err != nil {
 				return err
 			}
 			env.install = nil
@@ -422,6 +433,7 @@ pode rodar de novo.`,
 		},
 	}
 	setup.Flags().StringVar(&key, "key", "", "chave pública da CI a autorizar")
+	setup.Flags().StringVar(&host, "host", "", "endereço pelo qual a CI alcança o servidor (hostname ou IP; vira DEPLOY_HOST)")
 	setup.Flags().BoolVar(&genKey, "generate-key", false, "gera a chave da CI aqui e grava em ./ci_deploy_key (veja key generate)")
 	setup.Flags().StringVar(&keyOut, "key-out", "", "com --generate-key: grava a chave privada neste arquivo (padrão: ./ci_deploy_key)")
 	setup.MarkFlagsMutuallyExclusive("key", "generate-key")

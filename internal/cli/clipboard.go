@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -43,7 +41,7 @@ type copyItem struct{ label, text string }
 // offerCopy lets the operator copy texts that are hard to select on screen
 // (in the TUI the menu is drawn beside them), or save the gh commands to a
 // file. Only in the TUI; ghCommands may be empty.
-func offerCopy(env *Env, ghCommands string, items ...copyItem) error {
+func offerCopy(env *Env, ghCommands, script string, items ...copyItem) error {
 	if !env.TUI || !env.UI.Interactive {
 		return nil
 	}
@@ -58,7 +56,7 @@ func offerCopy(env *Env, ghCommands string, items ...copyItem) error {
 			opts = append(opts, huh.NewOption("Copiar "+it.label, strconv.Itoa(i)))
 		}
 		if ghCommands != "" {
-			opts = append(opts, huh.NewOption("Salvar os comandos gh num arquivo (se copiar não funcionar)", "file"))
+			opts = append(opts, huh.NewOption("Salvar um script dos secrets (sh github-secrets.sh dono/repo)", "file"))
 		}
 		opts = append(opts, huh.NewOption("Concluir", "done"))
 		if err := env.UI.Select("Copiar para a área de transferência do seu terminal?", &choice, opts...); err != nil {
@@ -68,7 +66,7 @@ func offerCopy(env *Env, ghCommands string, items ...copyItem) error {
 		case "done":
 			return nil
 		case "file":
-			if err := saveCommands(env, ghCommands); err != nil {
+			if err := saveCommands(env, script); err != nil {
 				env.UI.Warn("%s", err.Error())
 			}
 		default:
@@ -83,10 +81,10 @@ func offerCopy(env *Env, ghCommands string, items ...copyItem) error {
 	}
 }
 
-// saveCommands writes the gh commands to a root-only file.
-func saveCommands(env *Env, commands string) error {
+// saveCommands writes the secrets script where the operator says.
+func saveCommands(env *Env, script string) error {
 	dir, _ := os.Getwd()
-	def := filepath.Join(dir, "github-secrets.sh")
+	def := freeScriptPath(dir)
 	var path string
 	if err := env.UI.Input("Salvar em", def, &path, nil); err != nil {
 		return err
@@ -94,17 +92,9 @@ func saveCommands(env *Env, commands string) error {
 	if path == "" {
 		path = def
 	}
-	if _, err := os.Lstat(path); err == nil {
-		return fmt.Errorf("%s já existe — escolha outro caminho", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := writeScript(path, script); err != nil {
 		return err
 	}
-	body := "#!/bin/sh\n# Secrets do GitHub para deploy-tools. Rode na máquina onde está a chave privada.\n" +
-		"# Não compartilhe este arquivo; apague depois de usar.\nset -e\n" + commands + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		return err
-	}
-	chownToInvoker(path)
-	env.UI.OK("Salvo em %s (modo 600). Depois de sair: sh %s (precisa do gh logado)", path, path)
+	env.UI.OK("Salvo em %s (modo 600). Depois de sair: sh %s dono/repo  (precisa do gh logado)", path, path)
 	return nil
 }

@@ -182,6 +182,124 @@ func printSecrets(env *Env, s provision.Secrets, privateKey string, target secre
 	}
 }
 
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// ghScript is a standalone script that sets the secrets on the repository
+// (or organization) given as its first argument; the private key file is
+// keyPath unless a second argument overrides it.
+func ghScript(s provision.Secrets, keyPath string) string {
+	if keyPath == "" {
+		keyPath = "ci_deploy_key"
+	}
+	var b strings.Builder
+	b.WriteString(`#!/bin/sh
+# Secrets do GitHub para publicar com deploy-tools em ` + s.Host + `.
+# Uso: sh github-secrets.sh <dono/repo> [arquivo-da-chave-privada]
+#      sh github-secrets.sh --org <organização> [arquivo-da-chave-privada]
+# Precisa do gh logado (gh auth login). Não compartilhe este arquivo; apague depois de usar.
+set -eu
+usage() { echo "uso: $0 <dono/repo> | --org <organização>  [arquivo-da-chave-privada]" >&2; exit 2; }
+if [ "${1:-}" = "--org" ]; then
+  [ -n "${2:-}" ] || usage
+  ORG=$2 KEY=${3:-` + shQuote(keyPath) + `}
+  secret() { gh secret set "$1" --org "$ORG" --visibility all; }
+else
+  [ -n "${1:-}" ] || usage
+  REPO=$1 KEY=${2:-` + shQuote(keyPath) + `}
+  secret() { gh secret set "$1" -R "$REPO"; }
+fi
+[ -r "$KEY" ] || { echo "chave privada não encontrada: $KEY (passe o caminho como último argumento)" >&2; exit 1; }
+
+printf '%s' ` + shQuote(s.Host) + ` | secret DEPLOY_HOST
+printf '%s' ` + shQuote(s.User) + ` | secret DEPLOY_USER
+secret DEPLOY_SSH_KEY < "$KEY"
+`)
+	if len(s.HostKeys) > 0 {
+		b.WriteString("printf '%s\\n' \\\n")
+		for _, l := range s.HostKeys {
+			b.WriteString("  " + shQuote(l) + " \\\n")
+		}
+		b.WriteString("  | secret DEPLOY_HOST_KEY\n")
+	}
+	b.WriteString(`echo "Secrets DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY e DEPLOY_HOST_KEY gravados."` + "\n")
+	return b.String()
+}
+
+// freeScriptPath is dir/github-secrets.sh, or -2, -3... if taken.
+func freeScriptPath(dir string) string {
+	for i := 1; ; i++ {
+		name := "github-secrets.sh"
+		if i > 1 {
+			name = "github-secrets-" + strconv.Itoa(i) + ".sh"
+		}
+		if p := filepath.Join(dir, name); func() bool { _, err := os.Lstat(p); return os.IsNotExist(err) }() {
+			return p
+		}
+	}
+}
+
+// writeScript saves ghScript to path (0600, owned by the sudo user).
+func writeScript(path, script string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("%s já existe — escolha outro caminho", path)
+	}
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+		return err
+	}
+	chownToInvoker(path)
+	return nil
+}
+
+// askDeployHost asks how the CI reaches this server: the current value,
+// the hostname, an interface IP or a typed address (e.g. the public IP
+// behind NAT).
+func askDeployHost(env *Env) (string, error) {
+	cur := env.Paths.DeployHost
+	var opts []huh.Option[string]
+	if cur != "" {
+		opts = append(opts, huh.NewOption(cur+"   (atual)", cur))
+	}
+	for _, c := range provision.HostCandidates() {
+		if c.Value != cur {
+			opts = append(opts, huh.NewOption(c.Value+"   ("+c.Label+")", c.Value))
+		}
+	}
+	opts = append(opts, huh.NewOption("Outro: digitar (IP público, DNS...)", otherDomain))
+	choice := opts[0].Value
+	if err := env.UI.Select("Como o GitHub vai acessar este servidor? Vira o DEPLOY_HOST e entra no DEPLOY_HOST_KEY "+
+		"(o SSH confere o host key pelo mesmo nome ou IP usado na conexão).", &choice, opts...); err != nil {
+		return "", err
+	}
+	if choice == otherDomain {
+		choice = ""
+		if err := env.UI.Input("Endereço do servidor (hostname ou IP)", "deploy.example.com", &choice, provision.ValidateHost); err != nil {
+			return "", err
+		}
+	}
+	return choice, nil
+}
+
+// ensureDeployHost asks for DEPLOY_HOST on a terminal (always, or only
+// when unset) and saves it when running as root.
+func ensureDeployHost(env *Env, always bool) error {
+	if !env.UI.Interactive || (!always && env.Paths.DeployHost != "") {
+		return nil
+	}
+	h, err := askDeployHost(env)
+	if err != nil || h == env.Paths.DeployHost {
+		return err
+	}
+	if env.RequireRoot() != nil {
+		env.P.Paths.DeployHost, env.Paths.DeployHost = h, h
+		return nil
+	}
+	if err := env.P.SetDeployHost(h); err != nil {
+		return err
+	}
+	syncPaths(env)
+	return nil
+}
+
 // ghCommands are the `gh secret set` commands for s, one per line (the
 // host keys one spans several).
 func ghCommands(s provision.Secrets, privateKey string, target secretsTarget) string {
@@ -216,7 +334,7 @@ func privateKeyName(pub string) string {
 func secretsCmd(env *Env) *cobra.Command {
 	var host string
 	var t secretsTarget
-	var copyGh, ghOnly bool
+	var copyGh, ghOnly, script bool
 	cmd := &cobra.Command{
 		Use:   "secrets",
 		Short: "Mostra como devem ficar os secrets do GitHub para este servidor",
@@ -227,13 +345,18 @@ equivalentes. A chave privada não fica no servidor e nunca é mostrada.
 Não compartilhe a saída: cole os valores só nos secrets do GitHub.`,
 		Example: `  deploy-tools key secrets
   deploy-tools key secrets --host deploy.example.com --repo acme/site
-  deploy-tools key secrets --org acme`,
+  deploy-tools key secrets --org acme
+  deploy-tools key secrets --script > github-secrets.sh && sh github-secrets.sh acme/site ~/ci_deploy_key`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			s := env.P.Secrets(host)
-			if ghOnly {
+			switch {
+			case script:
+				env.UI.Printf("%s", ghScript(s, ""))
+				return nil
+			case ghOnly:
 				env.UI.Println(ghCommands(s, "", t))
-			} else {
+			default:
 				printSecrets(env, s, "", t)
 			}
 			if copyGh {
@@ -242,14 +365,16 @@ Não compartilhe a saída: cole os valores só nos secrets do GitHub.`,
 				}
 				env.UI.OK("Comandos gh enviados para a área de transferência do seu terminal (OSC 52).")
 			}
-			return offerCopy(env, ghCommands(s, "", t))
+			return offerCopy(env, ghCommands(s, "", t), ghScript(s, ""))
 		},
 	}
+	cmd.Flags().BoolVar(&script, "script", false, "imprime um script que recebe o repositório: sh github-secrets.sh dono/repo [chave]")
 	cmd.Flags().BoolVar(&copyGh, "copy", false, "copia os comandos gh para a área de transferência do seu terminal (OSC 52, funciona por SSH)")
 	cmd.Flags().BoolVar(&ghOnly, "gh-only", false, "imprime só os comandos gh, sem formatação (para > arquivo.sh)")
 	cmd.Flags().StringVar(&host, "host", "", "endereço do servidor para a CI (padrão: DEPLOY_HOST de "+config.File+" ou o hostname)")
 	cmd.Flags().StringVar(&t.repo, "repo", "", "repositório dono/nome, para os comandos gh")
 	cmd.Flags().StringVar(&t.org, "org", "", "organização, para os comandos gh (secrets compartilhados)")
+	cmd.MarkFlagsMutuallyExclusive("script", "gh-only")
 	cmd.MarkFlagsMutuallyExclusive("repo", "org")
 	return cmd
 }
@@ -310,6 +435,9 @@ func chownToInvoker(path string) {
 // deploy-tools was run from, or where g.out says; g.printOnly shows it
 // once instead.
 func doGenerateKey(env *Env, g keyGen) error {
+	if err := ensureDeployHost(env, false); err != nil {
+		return err
+	}
 	if g.comment == "" {
 		host, _ := os.Hostname()
 		g.comment = "ci-deploy@" + host
@@ -364,7 +492,15 @@ func doGenerateKey(env *Env, g keyGen) error {
 	env.UI.Println()
 	s := env.P.Secrets("")
 	printSecrets(env, s, name, secretsTarget{})
-	return offerCopy(env, ghCommands(s, name, secretsTarget{}),
+	if out != "" {
+		script := freeScriptPath(filepath.Dir(out))
+		if err := writeScript(script, ghScript(s, out)); err == nil {
+			env.UI.Println()
+			env.UI.OK("Script dos secrets gravado em %s", script)
+			env.UI.Hint("Para cadastrar num repositório (com o gh logado): sh %s dono/repo  —  ou --org <organização>", script)
+		}
+	}
+	return offerCopy(env, ghCommands(s, name, secretsTarget{}), ghScript(s, name),
 		copyItem{"a chave privada (DEPLOY_SSH_KEY)", string(priv)})
 }
 

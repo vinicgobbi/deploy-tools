@@ -97,3 +97,23 @@ func TestGenerateKey(t *testing.T) {
 		}
 	}
 }
+
+func TestSetDeployHost(t *testing.T) {
+	p, _ := newP(t)
+	for _, bad := range []string{"", "a b", "x;rm", "http://x"} {
+		if err := p.SetDeployHost(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	for _, good := range []string{"179.199.156.62", "deploy.example.com", "srv01", "2001:db8::1"} {
+		if err := p.SetDeployHost(good); err != nil {
+			t.Errorf("%q: %v", good, err)
+		}
+	}
+	if s := p.Secrets(""); s.Host != "2001:db8::1" {
+		t.Fatalf("host = %q", s.Host)
+	}
+	if c := HostCandidates(); len(c) == 0 || c[0].Label != "hostname" {
+		t.Fatalf("candidates = %+v", c)
+	}
+}

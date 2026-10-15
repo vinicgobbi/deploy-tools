@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -651,7 +653,8 @@ func TestTUIOffersCopyAndSave(t *testing.T) {
 		t.Fatalf("nothing copied:\n%s", out)
 	}
 	b, err := os.ReadFile(file)
-	if err != nil || !strings.Contains(string(b), "gh secret set DEPLOY_USER") || !strings.Contains(string(b), "Não compartilhe") {
+	if err != nil || !strings.Contains(string(b), "| secret DEPLOY_USER") || !strings.Contains(string(b), "Não compartilhe") ||
+		!strings.Contains(string(b), "sh github-secrets.sh <dono/repo>") {
 		t.Fatalf("file: %v\n%s", err, b)
 	}
 	if fi, _ := os.Stat(file); fi.Mode().Perm() != 0o600 {
@@ -660,9 +663,10 @@ func TestTUIOffersCopyAndSave(t *testing.T) {
 }
 
 func TestGeneratedKeyCanBeCopiedInTUI(t *testing.T) {
-	// 1 = copy the private key, 4 = done (2 = gh commands, 3 = save).
+	// 1 = DEPLOY_HOST: the hostname (asked first, it was never set);
+	// then 1 = copy the private key, 4 = done (2 = gh commands, 3 = save).
 	t.Chdir(t.TempDir())
-	env, out := testEnv(t, "1\n4\n")
+	env, out := testEnv(t, "1\n1\n4\n")
 	env.TUI = true
 	var clip bytes.Buffer
 	env.clipboard = &clip
@@ -673,5 +677,96 @@ func TestGeneratedKeyCanBeCopiedInTUI(t *testing.T) {
 	key, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil || !strings.HasPrefix(string(key), "-----BEGIN OPENSSH PRIVATE KEY-----") {
 		t.Fatalf("copied: %q %v", key, err)
+	}
+}
+
+func TestGhScriptRuns(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sem sh")
+	}
+	dir := t.TempDir()
+	key := filepath.Join(dir, "ci_deploy_key")
+	_ = os.WriteFile(key, []byte("PRIVATE"), 0o600)
+	script := filepath.Join(dir, "github-secrets.sh")
+	s := provision.Secrets{Host: "179.199.156.62", User: "deploy", HostKeys: []string{"179.199.156.62 ssh-ed25519 AAAAx", "179.199.156.62 ssh-rsa AAAAy"}}
+	_ = os.WriteFile(script, []byte(ghScript(s, key)), 0o600)
+
+	// A fake gh that logs its arguments and what it read on stdin.
+	bin := filepath.Join(dir, "bin")
+	_ = os.MkdirAll(bin, 0o755)
+	log := filepath.Join(dir, "gh.log")
+	_ = os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\n{ echo \"ARGS $*\"; cat; echo; } >> "+log+"\n"), 0o755)
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command(sh, append([]string{script}, args...)...)
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	if _, err := run(); err == nil {
+		t.Fatal("no repository must fail with the usage")
+	}
+	if out, err := run("acme/site"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	got, _ := os.ReadFile(log)
+	want := "ARGS secret set DEPLOY_HOST -R acme/site\n179.199.156.62\n" +
+		"ARGS secret set DEPLOY_USER -R acme/site\ndeploy\n" +
+		"ARGS secret set DEPLOY_SSH_KEY -R acme/site\nPRIVATE\n" +
+		"ARGS secret set DEPLOY_HOST_KEY -R acme/site\n179.199.156.62 ssh-ed25519 AAAAx\n179.199.156.62 ssh-rsa AAAAy\n\n"
+	if string(got) != want {
+		t.Fatalf("gh calls:\n%s\nwant:\n%s", got, want)
+	}
+
+	_ = os.Remove(log)
+	other := filepath.Join(dir, "outra_chave")
+	_ = os.WriteFile(other, []byte("OTHER"), 0o600)
+	if out, err := run("--org", "acme", other); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "ARGS secret set DEPLOY_SSH_KEY --org acme --visibility all\nOTHER") {
+		t.Fatalf("--org:\n%s", got)
+	}
+	if out, err := run("acme/site", filepath.Join(dir, "nope")); err == nil || !strings.Contains(out, "chave privada não encontrada") {
+		t.Fatalf("missing key: %v %s", err, out)
+	}
+}
+
+func TestSetupAsksDeployHostAndScriptIsSaved(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	// DEPLOY_HOST: last option = type one; the public IP behind NAT.
+	env, out := testEnv(t, "")
+	n := len(provision.HostCandidates()) + 1
+	env.UI.In = strings.NewReader(strconv.Itoa(n) + "\n179.199.156.62\n")
+	env.UI.Interactive = true
+	env.Self = filepath.Join(t.TempDir(), "deploy-tools-linux-amd64")
+	_ = os.WriteFile(env.Self, []byte("bin"), 0o755)
+	if err := runCLI(env, "server", "setup", "--generate-key"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if loaded, _ := config.Load(env.Paths.ConfigFile); loaded.DeployHost != "179.199.156.62" {
+		t.Fatalf("DEPLOY_HOST = %q\n%s", loaded.DeployHost, out)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "github-secrets.sh"))
+	if err != nil || !strings.Contains(string(b), "'179.199.156.62 ssh-") && len(env.P.Secrets("").HostKeys) > 0 {
+		t.Fatalf("script: %v\n%s", err, b)
+	}
+	if !strings.Contains(string(b), "KEY=${2:-'"+filepath.Join(dir, "ci_deploy_key")+"'}") {
+		t.Fatalf("script key path:\n%s", b)
+	}
+	if !strings.Contains(out.String(), "sh "+filepath.Join(dir, "github-secrets.sh")+" dono/repo") {
+		t.Fatalf("hint:\n%s", out)
+	}
+
+	// With --host, nothing is asked.
+	env2, out2 := testEnv(t, "")
+	env2.Self = env.Self
+	if err := runCLI(env2, "server", "setup", "--host", "deploy.example.com"); err != nil {
+		t.Fatalf("%v\n%s", err, out2)
+	}
+	if loaded, _ := config.Load(env2.Paths.ConfigFile); loaded.DeployHost != "deploy.example.com" {
+		t.Fatalf("DEPLOY_HOST = %q", loaded.DeployHost)
 	}
 }
