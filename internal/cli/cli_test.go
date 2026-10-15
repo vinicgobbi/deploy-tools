@@ -539,3 +539,60 @@ func TestBaseDomainAddAsksForCertificate(t *testing.T) {
 		t.Fatalf("WildcardCert = %+v %v", c, ok)
 	}
 }
+
+func TestKeyGenerate(t *testing.T) {
+	env, out := testEnv(t, "")
+	if err := runCLI(env, "key", "generate"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	got := out.String()
+	for _, want := range []string{"chave PRIVADA da CI", "não será mostrada de novo", "-----BEGIN OPENSSH PRIVATE KEY-----",
+		"Secrets do GitHub", "ci-deploy@"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("faltou %q:\n%s", want, got)
+		}
+	}
+	if keys, _ := env.P.Keys(); len(keys) != 1 || keys[0].Command != env.Paths.WrapperPath() {
+		t.Fatalf("keys = %+v", keys)
+	}
+
+	// --out: written 0600, never printed; an existing file is refused.
+	out.Reset()
+	file := filepath.Join(t.TempDir(), "ci_key")
+	if err := runCLI(env, "key", "generate", "--out", file, "--comment", "deploy@acme"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "BEGIN OPENSSH") {
+		t.Fatalf("private key printed with --out:\n%s", out)
+	}
+	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("file: %v %v", fi, err)
+	}
+	if !strings.Contains(out.String(), "gh secret set DEPLOY_SSH_KEY -R <dono>/<repo> < "+file) {
+		t.Fatalf("gh hint:\n%s", out)
+	}
+	if err := runCLI(env, "key", "generate", "--out", file); err == nil {
+		t.Fatal("overwrote an existing file")
+	}
+	if keys, _ := env.P.Keys(); len(keys) != 2 {
+		t.Fatalf("the refused run must not authorize a key: %+v", keys)
+	}
+}
+
+func TestServerSetupGeneratesKey(t *testing.T) {
+	env, out := testEnv(t, "")
+	env.Self = filepath.Join(t.TempDir(), "deploy-tools-linux-amd64")
+	_ = os.WriteFile(env.Self, []byte("bin"), 0o755)
+	if err := runCLI(env, "server", "setup", "--generate-key", "--key", "x.pub"); err == nil {
+		t.Fatal("--generate-key and --key together must fail")
+	}
+	if err := runCLI(env, "server", "setup", "--generate-key"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "-----BEGIN OPENSSH PRIVATE KEY-----") {
+		t.Fatalf("no key:\n%s", out)
+	}
+	if keys, _ := env.P.Keys(); len(keys) != 1 {
+		t.Fatalf("keys = %+v", keys)
+	}
+}

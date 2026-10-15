@@ -40,15 +40,32 @@ via mod_php.
 
 ## Setup de um servidor
 
-Gere o par de chaves da CI **na sua máquina**, não no servidor, e baixe o
-binário da [última release](https://github.com/vinicgobbi/deploy-tools/releases):
+Baixe o binário da [última release](https://github.com/vinicgobbi/deploy-tools/releases)
+no servidor e rode o setup, gerando a chave da CI ali mesmo:
+
+```bash
+curl -fLO https://github.com/vinicgobbi/deploy-tools/releases/download/vX.Y.Z/deploy-tools-linux-amd64
+chmod +x deploy-tools-linux-amd64
+sudo ./deploy-tools-linux-amd64 server setup --generate-key
+```
+
+Com `--generate-key`, o par ed25519 é criado em memória. A chave pública é
+autorizada na hora, e a **privada aparece uma única vez**, para você colar no
+secret `DEPLOY_SSH_KEY`. Ela não fica salva no servidor. Com
+`--key-out /root/ci_deploy_key`, ela vai para esse arquivo (modo 600) em vez
+da tela, por exemplo para usar com `gh secret set`. Depois, apague o
+arquivo. Para gerar outra chave depois: `sudo deploy-tools key generate`.
+
+Se preferir gerar o par na sua máquina, a chave privada nunca passa pelo
+servidor:
 
 ```bash
 ssh-keygen -t ed25519 -C "ci-deploy" -f ci_deploy_key -N ""
-curl -fLO https://github.com/vinicgobbi/deploy-tools/releases/download/vX.Y.Z/deploy-tools-linux-amd64
 scp deploy-tools-linux-amd64 ci_deploy_key.pub usuario@servidor:/tmp/
 ssh usuario@servidor 'chmod +x /tmp/deploy-tools-linux-amd64 && sudo /tmp/deploy-tools-linux-amd64 server setup --key /tmp/ci_deploy_key.pub'
 ```
+
+Na TUI, o "Setup de servidor" e o "Adicionar chave" oferecem as duas opções.
 
 O `server setup` é idempotente e faz o seguinte:
 
@@ -58,10 +75,11 @@ O `server setup` é idempotente e faz o seguinte:
 - Cria o `~/.ssh`.
 - Instala o binário em `/usr/local/bin/deploy-tools` e o symlink
   `/usr/local/bin/deploy-ci`.
-- Autoriza a chave pública com `command="/usr/local/bin/deploy-ci"` e
-  `no-pty`.
+- Gera (`--generate-key`) ou recebe (`--key`) a chave da CI e autoriza a
+  pública com `command="/usr/local/bin/deploy-ci"` e `no-pty`.
 
-Ao final, o `server setup --key` (e também o `key add`) mostra como devem
+Ao final, o `server setup` com chave (e também o `key add` e o
+`key generate`) mostra como devem
 ficar os secrets do GitHub para este servidor (veja
 [Secrets](#secrets-no-github)). Se quiser, configure também
 [`/etc/deploy-tools.conf`](#configuração-do-servidor-etcdeploy-toolsconf).
@@ -251,10 +269,11 @@ deploy-tools app status <app>
 deploy-tools release list <app>
 deploy-tools release rollback <app> [release]   # sem release: volta para a anterior
 deploy-tools key add <arquivo.pub>
+deploy-tools key generate [--out arquivo] [--comment c]
 deploy-tools key list
 deploy-tools key secrets [--host h] [--repo dono/repo | --org org]
 deploy-tools server install
-deploy-tools server setup [--key arquivo.pub]
+deploy-tools server setup [--generate-key [--key-out arquivo] | --key arquivo.pub]
 deploy-tools server certs
 deploy-tools server domain list|add|remove [domínio]... [--cert c --key k [--chain b]]
 deploy-tools server status                      # instalado ou rodando solto?
@@ -428,7 +447,8 @@ O comando lê `DEPLOY_HOST_KEY` das host keys do próprio servidor
 conferir com `ssh-keygen -lf ci_deploy_key` na sua máquina) e os comandos
 `gh secret set` equivalentes. Com eles, a chave privada vai do arquivo direto
 para o GitHub, sem passar pela tela. A chave privada nunca fica no servidor,
-então o comando não tem como mostrá-la.
+então o comando não tem como mostrá-la. Se ela se perdeu, gere outra com
+`sudo deploy-tools key generate` (e remova a antiga do `authorized_keys`).
 
 > **Não compartilhe essa saída** (chat, ticket, e-mail, print de tela). Junto
 > com a chave privada, ela permite publicar em todos os apps do servidor.

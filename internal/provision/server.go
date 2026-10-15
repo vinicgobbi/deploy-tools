@@ -2,8 +2,11 @@ package provision
 
 import (
 	"bufio"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +16,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/vinicgobbi/deploy-tools/internal/run"
 )
@@ -89,7 +94,8 @@ func copyFile(src, dst string, mode os.FileMode) error {
 }
 
 // Setup bootstraps a fresh server: deploy user, ~/.ssh, binary, and
-// optionally the CI key. Idempotent.
+// optionally the CI key from pubKey (GenerateKey creates one instead).
+// Idempotent.
 func (p *Provisioner) Setup(self, pubKey string) error {
 	u := p.Paths.DeployUser
 	if _, err := user.Lookup(u); err != nil {
@@ -201,13 +207,41 @@ func (p *Provisioner) AddKey(pubKeyFile string) error {
 	if err != nil {
 		return err
 	}
+	if strings.HasPrefix(strings.TrimSpace(string(b)), "-----BEGIN") {
+		return fmt.Errorf("%s é uma chave PRIVADA — use o arquivo .pub", pubKeyFile)
+	}
 	k, ok := parseKeyLine(strings.SplitN(strings.TrimSpace(string(b)), "\n", 2)[0])
 	if !ok {
 		return fmt.Errorf("%s não parece uma chave pública SSH (esperado: ssh-ed25519 AAAA... comentário)", pubKeyFile)
 	}
-	if strings.HasPrefix(strings.TrimSpace(string(b)), "-----BEGIN") {
-		return fmt.Errorf("%s é uma chave PRIVADA — use o arquivo .pub", pubKeyFile)
+	return p.authorize(k)
+}
+
+// GenerateKey creates an ed25519 key pair in memory, authorizes the public
+// half (restricted to the forced command) and returns the private key in
+// OpenSSH format. The private key is never written by this function: the
+// caller shows it once or saves it where the operator asked.
+func (p *Provisioner) GenerateKey(comment string) (private []byte, key Key, err error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, Key{}, err
 	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return nil, Key{}, err
+	}
+	blk, err := ssh.MarshalPrivateKey(priv, comment)
+	if err != nil {
+		return nil, Key{}, err
+	}
+	key = Key{Type: sshPub.Type(), Blob: base64.StdEncoding.EncodeToString(sshPub.Marshal()), Comment: comment}
+	if err := p.authorize(key); err != nil {
+		return nil, Key{}, err
+	}
+	return pem.EncodeToMemory(blk), key, nil
+}
+
+func (p *Provisioner) authorize(k Key) error {
 	existing, err := p.Keys()
 	if err != nil {
 		return err

@@ -162,10 +162,12 @@ func tuiApp(env *Env) tui.App {
 				},
 				{
 					Label: "Adicionar chave", Root: true, Run: rooted(func() error { return iAddKey(env) }),
-					Desc: text("Autoriza uma chave pública (.pub) da CI, restrita ao comando de deploy.\n\n" +
-						"Gere o par na sua máquina, não no servidor:\n" +
+					Desc: text("Autoriza uma chave da CI, restrita ao comando de deploy. Duas opções:\n\n" +
+						"• Gerar agora, aqui: o par é criado em memória, a pública é autorizada e a privada aparece " +
+						"uma única vez, para o secret DEPLOY_SSH_KEY. Ela não fica salva no servidor.\n" +
+						"• Usar um .pub gerado na sua máquina:\n" +
 						"ssh-keygen -t ed25519 -C ci-deploy -f ci_deploy_key -N \"\""),
-					CLI: "sudo deploy-tools key add <arquivo.pub>",
+					CLI: "sudo deploy-tools key generate  |  sudo deploy-tools key add <arquivo.pub>",
 				},
 				{
 					Label: "Secrets do GitHub", Run: func() error {
@@ -190,8 +192,9 @@ func tuiApp(env *Env) tui.App {
 				{
 					Label: "Setup de servidor", Root: true, Run: rooted(func() error { return iSetup(env) }),
 					Desc: text("Prepara um servidor novo: cria (ou corrige) o usuário " + env.Paths.DeployUser +
-						", instala o binário e, se você informar, autoriza a chave da CI. Pode rodar de novo sem problema."),
-					CLI: "sudo deploy-tools server setup [--key arquivo.pub]",
+						", instala o binário e cuida da chave da CI: gera aqui na hora (a privada aparece uma vez), " +
+						"autoriza um .pub seu ou pula. Pode rodar de novo sem problema."),
+					CLI: "sudo deploy-tools server setup [--generate-key | --key arquivo.pub]",
 				},
 				{
 					Label: "Domínios coringa", Root: true, Run: rooted(func() error { return iBaseDomains(env) }),
@@ -487,9 +490,12 @@ func iCert(env *Env) error {
 }
 
 func iAddKey(env *Env) error {
-	var path string
-	if err := env.UI.Input("Caminho da chave PÚBLICA (.pub)", "ci_deploy_key.pub", &path, fileExists); err != nil {
+	choice, path, err := askKeySource(env, false)
+	if err != nil {
 		return err
+	}
+	if choice == "generate" {
+		return doGenerateKey(env, "", "")
 	}
 	if err := env.P.AddKey(path); err != nil {
 		return err
@@ -509,13 +515,8 @@ func iInstall(env *Env) error {
 }
 
 func iSetup(env *Env) error {
-	var path string
-	if err := env.UI.Input("Chave pública da CI (.pub) — deixe vazio para pular", "", &path, func(s string) error {
-		if s == "" {
-			return nil
-		}
-		return fileExists(s)
-	}); err != nil {
+	choice, path, err := askKeySource(env, true)
+	if err != nil {
 		return err
 	}
 	if err := env.P.Setup(env.Self, path); err != nil {
@@ -523,7 +524,10 @@ func iSetup(env *Env) error {
 	}
 	env.install = nil
 	env.UI.OK("Servidor pronto.")
-	if path != "" {
+	switch choice {
+	case "generate":
+		return doGenerateKey(env, "", "")
+	case "file":
 		env.UI.Println()
 		printSecrets(env, env.P.Secrets(""), privateKeyName(path), secretsTarget{})
 	}

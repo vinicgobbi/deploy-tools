@@ -1,10 +1,14 @@
 package provision
 
 import (
+	"encoding/base64"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func TestInstallState(t *testing.T) {
@@ -57,5 +61,39 @@ func TestSecrets(t *testing.T) {
 	_ = os.Remove(p.Paths.AuthorizedKeys())
 	if s := p.Secrets(""); len(s.CIKeys) != 0 {
 		t.Fatalf("no keys: %+v", s.CIKeys)
+	}
+}
+
+func TestGenerateKey(t *testing.T) {
+	p, _ := newP(t)
+	priv, key, err := p.GenerateKey("ci-deploy@github")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(priv), "-----BEGIN OPENSSH PRIVATE KEY-----") {
+		t.Fatalf("private key:\n%s", priv)
+	}
+	signer, err := ssh.ParsePrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := p.Keys()
+	if len(keys) != 1 || keys[0].Blob != key.Blob || keys[0].Command != p.Paths.WrapperPath() || keys[0].Comment != "ci-deploy@github" {
+		t.Fatalf("authorized = %+v", keys)
+	}
+	if got := base64.StdEncoding.EncodeToString(signer.PublicKey().Marshal()); got != keys[0].Blob {
+		t.Fatal("authorized key is not the public half of the returned private key")
+	}
+	if b, _ := os.ReadFile(p.Paths.AuthorizedKeys()); strings.Contains(string(b), "PRIVATE") {
+		t.Fatal("private key written to authorized_keys")
+	}
+	// ssh-keygen, when present, must read the key too.
+	if path, err := exec.LookPath("ssh-keygen"); err == nil {
+		f := filepath.Join(t.TempDir(), "k")
+		_ = os.WriteFile(f, priv, 0o600)
+		out, err := exec.Command(path, "-y", "-f", f).Output()
+		if err != nil || !strings.Contains(string(out), key.Blob) {
+			t.Fatalf("ssh-keygen -y: %v %s", err, out)
+		}
 	}
 }

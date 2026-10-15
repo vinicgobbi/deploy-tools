@@ -2,9 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 
 	"github.com/vinicgobbi/deploy-tools/internal/config"
@@ -158,7 +160,7 @@ func printSecrets(env *Env, s provision.Secrets, privateKey string, target secre
 	env.UI.Println()
 	env.UI.Hint("%s", "DEPLOY_HOST é o endereço pelo qual o runner do GitHub alcança este servidor (DNS ou IP público). "+
 		"Se não for "+s.Host+", rode de novo com --host ou grave DEPLOY_HOST em "+config.File+".")
-	env.UI.Hint("%s", "O servidor não guarda a chave privada: ela fica só onde você rodou o ssh-keygen.")
+	env.UI.Hint("%s", "O servidor não guarda a chave privada. Se ela se perdeu, gere outra: sudo deploy-tools key generate.")
 	if s.CIKeys != nil {
 		if len(s.CIKeys) == 0 {
 			env.UI.Hint("Nenhuma chave da CI autorizada ainda: sudo deploy-tools key add %s.pub", privateKey)
@@ -234,4 +236,90 @@ func statusCmd(env *Env) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+const privateKeyWarning = "Esta é a chave PRIVADA da CI: ela publica em todos os apps deste servidor. " +
+	"Copie agora para o secret DEPLOY_SSH_KEY do GitHub. Ela não fica salva no servidor e não será mostrada de novo. " +
+	"Não compartilhe (chat, ticket, e-mail, print de tela)."
+
+// doGenerateKey creates and authorizes a CI key pair on the server. The
+// private key is printed once or, with out, written to that file (0600).
+func doGenerateKey(env *Env, comment, out string) error {
+	if comment == "" {
+		host, _ := os.Hostname()
+		comment = "ci-deploy@" + host
+	}
+	if out != "" {
+		if _, err := os.Lstat(out); err == nil {
+			return fmt.Errorf("%s já existe — escolha outro caminho", out)
+		}
+	}
+	priv, key, err := env.P.GenerateKey(comment)
+	if err != nil {
+		return err
+	}
+	name := "ci_deploy_key"
+	if out != "" {
+		if err := os.WriteFile(out, priv, 0o600); err != nil {
+			return fmt.Errorf("a chave pública já foi autorizada, mas a privada não pôde ser gravada (%w) — "+
+				"remova a linha %s do %s e gere de novo", err, key.Fingerprint(), env.Paths.AuthorizedKeys())
+		}
+		env.UI.OK("Chave privada gravada em %s (só root lê). Depois de cadastrar no GitHub, apague o arquivo.", out)
+		name = out
+	} else {
+		env.UI.Println()
+		env.UI.Warn("%s", privateKeyWarning)
+		env.UI.Println()
+		env.UI.Println(strings.TrimRight(string(priv), "\n"))
+		env.UI.Println()
+		env.UI.Hint("Na sua máquina, salve como ci_deploy_key (chmod 600) para usar com o gh, ou cole direto no GitHub.")
+	}
+	env.UI.Println()
+	printSecrets(env, env.P.Secrets(""), name, secretsTarget{})
+	return nil
+}
+
+func generateKeyCmd(env *Env) *cobra.Command {
+	var comment, out string
+	cmd := &cobra.Command{
+		Use:   "generate",
+		Short: "Gera a chave da CI aqui no servidor e já a autoriza",
+		Long: `Gera um par ed25519 em memória, autoriza a chave pública (restrita ao
+deploy-ci) e mostra a chave PRIVADA uma única vez, para o secret
+DEPLOY_SSH_KEY do GitHub. Ela não fica salva no servidor; com --out, vai
+para esse arquivo (modo 600) em vez da tela.`,
+		Example: `  sudo deploy-tools key generate
+  sudo deploy-tools key generate --out /root/ci_deploy_key   # e depois: gh secret set DEPLOY_SSH_KEY < /root/ci_deploy_key`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			if err := env.RequireRoot(); err != nil {
+				return err
+			}
+			return doGenerateKey(env, comment, out)
+		},
+	}
+	cmd.Flags().StringVar(&comment, "comment", "", "comentário da chave (padrão: ci-deploy@<hostname>)")
+	cmd.Flags().StringVar(&out, "out", "", "grava a chave privada neste arquivo em vez de mostrar")
+	return cmd
+}
+
+// askKeySource is the TUI choice for the CI key: generate, file or skip.
+func askKeySource(env *Env, allowSkip bool) (choice, path string, err error) {
+	choice = "generate"
+	opts := []huh.Option[string]{
+		huh.NewOption("Gerar agora, aqui no servidor (a chave privada aparece uma vez)", "generate"),
+		huh.NewOption("Usar um .pub que já gerei na minha máquina", "file"),
+	}
+	if allowSkip {
+		opts = append(opts, huh.NewOption("Pular por enquanto", "skip"))
+	}
+	if err := env.UI.Select("Chave da CI", &choice, opts...); err != nil {
+		return "", "", err
+	}
+	if choice == "file" {
+		if err := env.UI.Input("Caminho da chave PÚBLICA (.pub)", "ci_deploy_key.pub", &path, fileExists); err != nil {
+			return "", "", err
+		}
+	}
+	return choice, path, nil
 }

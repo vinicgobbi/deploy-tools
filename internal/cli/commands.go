@@ -351,6 +351,7 @@ Gere o par na sua máquina (não no servidor):
 		Args:    cobra.NoArgs,
 		RunE:    func(*cobra.Command, []string) error { return doKeys(env) },
 	})
+	key.AddCommand(generateKeyCmd(env))
 	key.AddCommand(secretsCmd(env))
 	return key
 }
@@ -380,14 +381,17 @@ Se deploy-ci já existia e não era um symlink, ele fica em
 			return nil
 		},
 	})
-	var key string
+	var key, keyOut string
+	var genKey bool
 	setup := &cobra.Command{
 		Use:   "setup",
 		Short: "Setup de servidor novo: usuário deploy, binário e chave da CI",
 		Long: `Cria (ou corrige) o usuário deploy, o ~/.ssh, instala o binário e,
-com --key, autoriza a chave da CI. Idempotente: pode rodar de novo.`,
-		Example: "  sudo ./deploy-tools server setup --key ci_deploy_key.pub",
-		Args:    cobra.NoArgs,
+com --key, autoriza a chave da CI; com --generate-key, gera a chave aqui
+mesmo e mostra a privada uma vez. Idempotente: pode rodar de novo.`,
+		Example: `  sudo ./deploy-tools server setup --generate-key
+  sudo ./deploy-tools server setup --key ci_deploy_key.pub`,
+		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			if err := env.RequireRoot(); err != nil {
 				return err
@@ -395,10 +399,15 @@ com --key, autoriza a chave da CI. Idempotente: pode rodar de novo.`,
 			if err := env.P.Setup(env.Self, key); err != nil {
 				return err
 			}
+			env.install = nil
 			env.UI.OK("Servidor pronto.")
+			if genKey {
+				return doGenerateKey(env, "", keyOut)
+			}
 			steps := []string{}
 			if key == "" {
-				steps = append(steps, "Autorize a chave da CI: sudo deploy-tools key add ci_deploy_key.pub")
+				steps = append(steps, "Autorize a chave da CI: sudo deploy-tools key add ci_deploy_key.pub "+
+					"(ou gere aqui: sudo deploy-tools key generate)")
 			}
 			steps = append(steps,
 				"Configure os secrets no GitHub (veja abaixo; de novo a qualquer hora: deploy-tools key secrets).",
@@ -412,6 +421,9 @@ com --key, autoriza a chave da CI. Idempotente: pode rodar de novo.`,
 		},
 	}
 	setup.Flags().StringVar(&key, "key", "", "chave pública da CI a autorizar")
+	setup.Flags().BoolVar(&genKey, "generate-key", false, "gera a chave da CI aqui e mostra a privada uma vez (veja key generate)")
+	setup.Flags().StringVar(&keyOut, "key-out", "", "com --generate-key: grava a chave privada neste arquivo em vez de mostrar")
+	setup.MarkFlagsMutuallyExclusive("key", "generate-key")
 	srv.AddCommand(setup, certsCmd(env), statusCmd(env), baseDomainCmd(env))
 	return srv
 }
