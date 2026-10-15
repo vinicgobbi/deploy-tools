@@ -69,7 +69,7 @@ func tuiApp(env *Env) tui.App {
 					Label: "Criar app", Root: true, Run: rooted(func() error { return iCreate(env) }),
 					Desc: text("Cria a pasta do app em " + env.Paths.AppsRoot + ", o .deploy.conf e o site no Apache " +
 						"(HTTPS, com o HTTP redirecionando).\n\nVocê escolhe o nome, o tipo (Laravel, React ou estático), " +
-						"o domínio e se o site já entra no ar. Nada é criado antes do resumo final."),
+						"o domínio (um subdomínio de um domínio coringa, ou qualquer outro) e se o site já entra no ar. Nada é criado antes do resumo final."),
 					CLI: "sudo deploy-tools app create <app> --type laravel|react|static",
 				},
 				{
@@ -191,6 +191,15 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools server setup [--key arquivo.pub]",
 				},
 				{
+					Label: "Domínios coringa", Root: true, Run: rooted(func() error { return iBaseDomains(env) }),
+					Desc: func() string {
+						return "Domínios base, como vinicgobbi.dev.br: ao criar um app, você escolhe um deles e o app " +
+							"ganha <subdomínio>.<domínio>. Com um certificado *.<domínio> no servidor, todo app novo " +
+							"já sai com HTTPS válido.\n\n" + tui.Capture(env.UI, func() { _ = doBaseDomains(env) })
+					},
+					CLI: "sudo deploy-tools server domain add|remove|list <domínio>",
+				},
+				{
 					Label: "Certificados TLS", Run: func() error { return certsCmd(env).RunE(nil, nil) },
 					Desc: text("Lista os certificados que o deploy-tools encontra no servidor e pode usar nos sites, " +
 						"com os domínios e a validade.\n\nPara fixar um certificado ou procurar em outras pastas, " +
@@ -263,30 +272,12 @@ func iCreate(env *Env) error {
 	); err != nil {
 		return err
 	}
-	o.Defaults(env.Paths.DomainSuffix)
-	defaultDomains := strings.Join(o.Domains, ", ")
-	var domains string
-	domain := huh.NewInput().Title("Domínios").Value(&domains).Validate(func(s string) error {
-		ds := provision.NormalizeDomains([]string{s})
-		if len(ds) == 0 && defaultDomains != "" {
-			return nil
-		}
-		if len(ds) == 0 {
-			return validate.Domain("")
-		}
-		for _, d := range ds {
-			if err := validate.Domain(d); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if defaultDomains != "" {
-		domain = domain.Description("Separados por vírgula; o 1º é o principal. Enter para usar " + defaultDomains).Placeholder(defaultDomains)
-	} else {
-		domain = domain.Description("Separados por vírgula; o 1º é o principal.").Placeholder("app.example.com, www.app.example.com")
+	ds, err := chooseDomains(env, o.App, true)
+	if err != nil {
+		return err
 	}
-	fields := []huh.Field{domain}
+	o.Domains = ds
+	var fields []huh.Field
 	if o.Type == validate.Laravel {
 		fields = append(fields, huh.NewConfirm().Title("Rodar as migrations do banco a cada deploy?").
 			Description("php artisan migrate --force, depois de publicar a release.").
@@ -297,9 +288,6 @@ func iCreate(env *Env) error {
 		Affirmative("Sim").Negative("Não").Value(&o.Enable))
 	if err := env.UI.Run(huh.NewGroup(fields...)); err != nil {
 		return err
-	}
-	if ds := provision.NormalizeDomains([]string{domains}); len(ds) > 0 {
-		o.Domains = ds
 	}
 
 	env.UI.Title("Resumo")
@@ -466,22 +454,11 @@ func iDomains(env *Env) error {
 		}
 		return env.P.RemoveDomains(app, rm)
 	}
-	var add string
-	if err := env.UI.Input("Domínios a adicionar (separados por vírgula)", "api.example.com, www.api.example.com", &add, func(s string) error {
-		ds := provision.NormalizeDomains([]string{s})
-		if len(ds) == 0 {
-			return validate.Domain("")
-		}
-		for _, d := range ds {
-			if err := validate.Domain(d); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+	add, err := chooseDomains(env, "", false)
+	if err != nil {
 		return err
 	}
-	return env.P.AddDomains(app, []string{add})
+	return env.P.AddDomains(app, add)
 }
 
 func iCert(env *Env) error {

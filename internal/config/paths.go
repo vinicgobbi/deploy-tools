@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/vinicgobbi/deploy-tools/internal/tlscert"
@@ -56,7 +57,12 @@ type Paths struct {
 	CertChain string   // optional: omitted from the vhost when empty
 	CertDirs  []string // where to look for certificates (tlscert.DefaultDirs + SSL_SEARCH_DIRS)
 
-	DomainSuffix string // appended to the app name when no domain is given; "" = --domain required
+	// Base (wildcard) domains: an app gets <subdomain>.<base> when no
+	// domain is given. With one base it is the default; with several the
+	// CLI asks which one. Empty: --domain is required.
+	BaseDomains []string
+	ConfigFile  string // File; re-rooted by ForRoot so tests can write it
+
 	KeepReleases int
 }
 
@@ -71,6 +77,7 @@ func Default() Paths {
 		DeployUser:   "deploy",
 		WebGroup:     "www-data",
 		CertDirs:     append([]string(nil), tlscert.DefaultDirs...),
+		ConfigFile:   File,
 		KeepReleases: 3,
 	}
 }
@@ -80,6 +87,7 @@ func Default() Paths {
 // line, # for comments; it is parsed, never sourced.
 func Load(path string) (Paths, error) {
 	p := Default()
+	p.ConfigFile = path
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return p, nil
@@ -100,11 +108,12 @@ func Load(path string) (Paths, error) {
 		}
 		key, val = strings.TrimSpace(key), strings.Trim(strings.TrimSpace(val), `"'`)
 		switch key {
-		case "DOMAIN_SUFFIX":
-			if val != "" && !strings.HasPrefix(val, ".") {
-				val = "." + val
+		case "BASE_DOMAINS", "DOMAIN_SUFFIX": // DOMAIN_SUFFIX: a single base, from v0.1/v0.2
+			for _, d := range splitList(val) {
+				if d = NormalizeBase(d); d != "" && !slices.Contains(p.BaseDomains, d) {
+					p.BaseDomains = append(p.BaseDomains, d)
+				}
 			}
-			p.DomainSuffix = val
 		case "DEPLOY_HOST":
 			p.DeployHost = val
 		case "SSL_CERT_FILE":
@@ -115,13 +124,69 @@ func Load(path string) (Paths, error) {
 			p.CertChain = val
 		case "SSL_SEARCH_DIRS":
 			// Extra directories, searched before the default ones.
-			p.CertDirs = append(strings.FieldsFunc(val, func(r rune) bool { return r == ':' || r == ' ' || r == ',' }),
-				tlscert.DefaultDirs...)
+			p.CertDirs = append(splitList(val), tlscert.DefaultDirs...)
 		default:
 			return p, fmt.Errorf("%s:%d: chave desconhecida %q", path, n, key)
 		}
 	}
 	return p, sc.Err()
+}
+
+func splitList(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ':' || r == ' ' || r == ',' })
+}
+
+// NormalizeBase turns "*.Example.com", ".example.com" or "example.com."
+// into "example.com".
+func NormalizeBase(d string) string {
+	d = strings.ToLower(strings.TrimSpace(d))
+	d = strings.TrimPrefix(strings.TrimPrefix(d, "*"), ".")
+	return strings.TrimSuffix(d, ".")
+}
+
+// SetBaseDomains writes BASE_DOMAINS into the config file at path,
+// replacing the old BASE_DOMAINS/DOMAIN_SUFFIX lines and keeping every
+// other line (comments included). The file is created when missing.
+func SetBaseDomains(path string, domains []string) error {
+	var lines []string
+	b, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	replaced := false
+	value := "BASE_DOMAINS=" + strings.Join(domains, ",")
+	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		key, _, _ := strings.Cut(strings.TrimSpace(line), "=")
+		switch strings.TrimSpace(key) {
+		case "BASE_DOMAINS", "DOMAIN_SUFFIX":
+			if !replaced {
+				lines = append(lines, value)
+				replaced = true
+			}
+			continue
+		}
+		if line != "" || len(lines) > 0 {
+			lines = append(lines, line)
+		}
+	}
+	if !replaced {
+		if len(lines) == 0 {
+			lines = append(lines, "# deploy-tools (veja o README)")
+		}
+		lines = append(lines, "# Domínios coringa: os apps ganham <subdomínio>.<domínio>", value)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")+"\n"), mode); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // ForRoot returns Default() with every absolute path re-rooted under root.
@@ -134,6 +199,7 @@ func ForRoot(root string) Paths {
 	p.BinDir = filepath.Join(root, p.BinDir)
 	p.DeployHome = filepath.Join(root, p.DeployHome)
 	p.SSHDir = filepath.Join(root, p.SSHDir)
+	p.ConfigFile = filepath.Join(root, File)
 	p.CertDirs = nil
 	for _, d := range tlscert.DefaultDirs {
 		p.CertDirs = append(p.CertDirs, filepath.Join(root, d))

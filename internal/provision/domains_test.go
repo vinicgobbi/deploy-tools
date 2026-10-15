@@ -54,7 +54,7 @@ func TestCreateFallsBackToSelfSigned(t *testing.T) {
 
 func TestCreateRequiresDomainWithoutSuffix(t *testing.T) {
 	p, _ := newP(t)
-	p.Paths.DomainSuffix = ""
+	p.Paths.BaseDomains = nil
 	err := p.Create(CreateOptions{App: "app", Type: "static"})
 	if err == nil || !strings.Contains(err.Error(), "domínio não informado") {
 		t.Fatalf("err = %v", err)

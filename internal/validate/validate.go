@@ -43,7 +43,7 @@ func ReleaseID(id string) error {
 // Domain is written into the Apache vhost, so it must be a plain hostname.
 func Domain(d string) error {
 	if d == "" {
-		return fmt.Errorf("domínio não informado (use --domain, ou DOMAIN_SUFFIX em /etc/deploy-tools.conf)")
+		return fmt.Errorf("domínio não informado (use --domain, ou cadastre um domínio coringa: deploy-tools server domain add <domínio>)")
 	}
 	if !domainRe.MatchString(d) {
 		return fmt.Errorf("domínio inválido: %q", d)

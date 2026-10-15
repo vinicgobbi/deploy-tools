@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/vinicgobbi/deploy-tools/internal/apache"
 	"github.com/vinicgobbi/deploy-tools/internal/appconf"
+	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/run"
 	"github.com/vinicgobbi/deploy-tools/internal/validate"
 )
@@ -15,17 +17,39 @@ import (
 type CreateOptions struct {
 	App             string
 	Type            string
-	Domains         []string   // first is the ServerName; default: <app><DomainSuffix>, when the suffix is set
+	Domains         []string   // first is the ServerName; default: <Sub>.<Base>
+	Base            string     // registered base domain; default: the only one registered
+	Sub             string     // subdomain of Base; default: SubdomainFor(App)
 	Cert            CertChoice // optional explicit certificate (File+Key[+Chain]); found automatically otherwise
 	MigrateOnDeploy bool       // laravel only
 	Enable          bool       // a2ensite + configtest + reload
 }
 
-func (o *CreateOptions) Defaults(suffix string) {
+// Defaults fills Domains from Base/Sub when no domain was given. With a
+// single registered base it is used without asking.
+func (o *CreateOptions) Defaults(bases []string) {
 	o.Domains = NormalizeDomains(o.Domains)
-	if len(o.Domains) == 0 && o.App != "" && suffix != "" {
-		o.Domains = []string{o.App + suffix}
+	if len(o.Domains) > 0 || o.App == "" {
+		return
 	}
+	base := config.NormalizeBase(o.Base)
+	if base == "" && len(bases) == 1 {
+		base = bases[0]
+	}
+	if base == "" {
+		return
+	}
+	sub := strings.ToLower(strings.Trim(strings.TrimSpace(o.Sub), "."))
+	if sub == "" {
+		sub = SubdomainFor(o.App)
+	}
+	o.Domains = []string{sub + "." + base}
+}
+
+// SubdomainFor turns an app name into a hostname label ("minha_api" ->
+// "minha-api"): "_" is valid in app names but not in DNS.
+func SubdomainFor(app string) string {
+	return strings.Trim(strings.ReplaceAll(strings.ToLower(app), "_", "-"), "-")
 }
 
 // CheckCreate validates everything up front so a failed create never
@@ -36,6 +60,14 @@ func (p *Provisioner) CheckCreate(o CreateOptions) error {
 	}
 	if err := validate.Type(o.Type); err != nil {
 		return err
+	}
+	if o.Base != "" && !slices.Contains(p.Paths.BaseDomains, config.NormalizeBase(o.Base)) {
+		return fmt.Errorf("domínio base %s não está cadastrado (%s) — cadastre com `deploy-tools server domain add %s`",
+			config.NormalizeBase(o.Base), registered(p.Paths.BaseDomains), config.NormalizeBase(o.Base))
+	}
+	if len(o.Domains) == 0 && len(p.Paths.BaseDomains) > 1 {
+		return fmt.Errorf("escolha o domínio: --base %s (ou outro cadastrado: %s), ou --domain",
+			p.Paths.BaseDomains[0], registered(p.Paths.BaseDomains))
 	}
 	if err := validateDomains(o.Domains); err != nil {
 		return err
@@ -50,7 +82,7 @@ func (p *Provisioner) CheckCreate(o CreateOptions) error {
 }
 
 func (p *Provisioner) Create(o CreateOptions) error {
-	o.Defaults(p.Paths.DomainSuffix)
+	o.Defaults(p.Paths.BaseDomains)
 	if err := p.CheckCreate(o); err != nil {
 		return err
 	}

@@ -18,7 +18,7 @@ import (
 func newP(t *testing.T) (*Provisioner, *run.Fake) {
 	t.Helper()
 	paths := config.ForRoot(t.TempDir())
-	paths.DomainSuffix = ".example.com"
+	paths.BaseDomains = []string{"example.com"}
 	for _, d := range []string{paths.AppsRoot, paths.SitesAvail, paths.SitesEnabled} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)

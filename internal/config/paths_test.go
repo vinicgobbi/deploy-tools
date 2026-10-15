@@ -3,12 +3,13 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestLoadMissingFile(t *testing.T) {
 	p, err := Load(filepath.Join(t.TempDir(), "nope.conf"))
-	if err != nil || p.CertFile != "" || p.DomainSuffix != "" || len(p.CertDirs) != len(Default().CertDirs) {
+	if err != nil || p.CertFile != "" || len(p.BaseDomains) != 0 || len(p.CertDirs) != len(Default().CertDirs) {
 		t.Fatalf("Load = %+v, %v", p, err)
 	}
 }
@@ -17,6 +18,7 @@ func TestLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "deploy-tools.conf")
 	body := `# servidor
 DOMAIN_SUFFIX=example.com
+BASE_DOMAINS=*.vinicgobbi.dev.br, Example.com
 SSL_CERT_FILE="/etc/letsencrypt/live/example.com/fullchain.pem"
 SSL_CERT_KEY = /etc/letsencrypt/live/example.com/privkey.pem
 SSL_SEARCH_DIRS=/srv/certs:/opt/tls
@@ -28,7 +30,7 @@ SSL_SEARCH_DIRS=/srv/certs:/opt/tls
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.DomainSuffix != ".example.com" || p.CertFile != "/etc/letsencrypt/live/example.com/fullchain.pem" ||
+	if strings.Join(p.BaseDomains, " ") != "example.com vinicgobbi.dev.br" || p.CertFile != "/etc/letsencrypt/live/example.com/fullchain.pem" ||
 		p.CertKey != "/etc/letsencrypt/live/example.com/privkey.pem" || p.CertChain != "" ||
 		p.CertDirs[0] != "/srv/certs" || p.CertDirs[1] != "/opt/tls" || p.CertDirs[2] != "/etc/letsencrypt/live" {
 		t.Fatalf("Load = %+v", p)
@@ -42,5 +44,32 @@ func TestLoadRejectsUnknownKey(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected error for unknown key")
+	}
+}
+
+func TestSetBaseDomains(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "etc", "deploy-tools.conf")
+	if err := SetBaseDomains(path, []string{"a.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := Load(path); err != nil || strings.Join(p.BaseDomains, " ") != "a.example.com" {
+		t.Fatalf("created: %+v %v", p.BaseDomains, err)
+	}
+
+	body := "# meu servidor\nDEPLOY_HOST=srv\nDOMAIN_SUFFIX=.old.com\n\n# cert\nSSL_CERT_FILE=/c.pem\n"
+	if err := os.WriteFile(path, []byte(body), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(path, 0o640)
+	if err := SetBaseDomains(path, []string{"old.com", "vinicgobbi.dev.br"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	want := "# meu servidor\nDEPLOY_HOST=srv\nBASE_DOMAINS=old.com,vinicgobbi.dev.br\n\n# cert\nSSL_CERT_FILE=/c.pem\n"
+	if string(b) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", b, want)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o640 {
+		t.Fatalf("mode = %v", fi.Mode().Perm())
 	}
 }

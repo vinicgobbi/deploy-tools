@@ -50,7 +50,7 @@ func doCreate(env *Env, o provision.CreateOptions) error {
 	if err := env.RequireRoot(); err != nil {
 		return err
 	}
-	o.Defaults(env.Paths.DomainSuffix)
+	o.Defaults(env.Paths.BaseDomains)
 	if err := env.P.Create(o); err != nil {
 		return err
 	}

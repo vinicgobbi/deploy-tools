@@ -21,7 +21,7 @@ import (
 func testEnv(t *testing.T, input string) (*Env, *bytes.Buffer) {
 	t.Helper()
 	paths := config.ForRoot(t.TempDir())
-	paths.DomainSuffix = ".example.com"
+	paths.BaseDomains = []string{"example.com"}
 	for _, d := range []string{paths.AppsRoot, paths.SitesAvail, paths.SitesEnabled} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -156,14 +156,16 @@ func TestConfigDetectsType(t *testing.T) {
 
 // In accessible mode the TUI is a numbered menu with the same items:
 // 1 Criar app, 2 Migrar, 3 Status, 4 Listar, 5 Rollback, 6 Configurar,
-// 7 Ativar site, 8 Desativar site, 9 Chaves, 10 Adicionar chave,
-// 13 Secrets, 14 Instalar, 15 Setup, 16 Certificados, 17 Sair.
+// 7 Ativar site, 8 Desativar site, 9 Domínios, 10 Certificado TLS,
+// 11 Chaves, 12 Adicionar chave, 13 Secrets, 14 Instalar, 15 Setup,
+// 16 Domínios coringa, 17 Certificados, 18 Sair.
 
 func TestInteractiveCreate(t *testing.T) {
-	// 1 = Criar app. Then name, type (1 = Laravel), domain (empty keeps
-	// the default), migrations y, enable n, confirm y. The menu comes back
-	// below the result: 17 = Sair.
-	answers := strings.Join([]string{"1", "minha-api", "1", "", "y", "n", "y", "17"}, "\n") + "\n"
+	// 1 = Criar app. Then name, type (1 = Laravel), domain (1 = the
+	// example.com base; empty subdomain keeps the app name; no extra
+	// domains), migrations y, enable n, confirm y. The menu comes back
+	// below the result: 18 = Sair.
+	answers := strings.Join([]string{"1", "minha-api", "1", "1", "", "", "y", "n", "y", "18"}, "\n") + "\n"
 	env, out := testEnv(t, answers)
 	env.UI.ClearScreen = true
 	if err := runCLI(env); err != nil {
@@ -192,7 +194,7 @@ func TestInteractiveCreate(t *testing.T) {
 }
 
 func TestInteractiveWithoutRootFailsBeforeAsking(t *testing.T) {
-	env, out := testEnv(t, "1\n17\n")
+	env, out := testEnv(t, "1\n18\n")
 	env.RequireRoot = func() error { return errors.New("precisa de root — rode com sudo") }
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -205,8 +207,8 @@ func TestInteractiveWithoutRootFailsBeforeAsking(t *testing.T) {
 
 func TestInteractiveRollback(t *testing.T) {
 	// 5 = Rollback; app 1 (docs); release 1 (= "2", newest non-current);
-	// confirm y; 17 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"5", "1", "1", "y", "17"}, "\n")+"\n")
+	// confirm y; 18 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"5", "1", "1", "y", "18"}, "\n")+"\n")
 	_ = os.MkdirAll(env.Paths.AppDir("docs"), 0o755)
 	deployN(t, env, "docs", "1", "2", "3")
 	if err := runCLI(env); err != nil {
@@ -243,8 +245,8 @@ func TestStatusCard(t *testing.T) {
 func TestInteractiveMigrate(t *testing.T) {
 	// 2 = Migrar; app 1 (docs, the only unmanaged one: "api" is already
 	// migrated and must not be offered); type 3 (Estático); confirm y;
-	// 17 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"2", "1", "3", "y", "17"}, "\n")+"\n")
+	// 18 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"2", "1", "3", "y", "18"}, "\n")+"\n")
 	_ = os.MkdirAll(env.Paths.AppDir("api"), 0o755)
 	deployN(t, env, "api", "1")
 	root := env.Paths.AppDir("docs")
@@ -287,8 +289,8 @@ func selectOptions(out, title string) []string {
 
 func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
 	// 6 = Configurar; app 1 (semconf, the only one offered); type 3
-	// (Estático); 17 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"6", "1", "3", "17"}, "\n")+"\n")
+	// (Estático); 18 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"6", "1", "3", "18"}, "\n")+"\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	if err := runCLI(env, "app", "create", "comconf", "--type", "react"); err != nil {
@@ -311,7 +313,7 @@ func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
 }
 
 func TestInteractiveConfigNothingToDo(t *testing.T) {
-	env, out := testEnv(t, "6\n17\n")
+	env, out := testEnv(t, "6\n18\n")
 	_ = os.MkdirAll(env.Paths.AppDir("legado"), 0o755)
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -323,8 +325,8 @@ func TestInteractiveConfigNothingToDo(t *testing.T) {
 
 func TestInteractiveDisable(t *testing.T) {
 	// 8 = Desativar site; app 1 (front, the only active site); confirm y;
-	// 17 = Sair.
-	env, out := testEnv(t, "8\n1\ny\n17\n")
+	// 18 = Sair.
+	env, out := testEnv(t, "8\n1\ny\n18\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	for _, app := range []string{"front", "parado"} {
@@ -467,5 +469,53 @@ func TestKeyAddShowsSecrets(t *testing.T) {
 	if got := out.String(); !strings.Contains(got, "gh secret set DEPLOY_HOST --org acme --visibility all --body '1.2.3.4'") ||
 		!strings.Contains(got, "'1.2.3.4 ssh-ed25519 AAAAhost'") {
 		t.Fatalf("key secrets:\n%s", got)
+	}
+}
+
+func TestBaseDomainCommandsAndCreate(t *testing.T) {
+	env, out := testEnv(t, "")
+	env.Paths.BaseDomains, env.P.Paths.BaseDomains = nil, nil
+	if err := runCLI(env, "server", "domain", "add", "example.com", "*.vinicgobbi.dev.br"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if strings.Join(env.Paths.BaseDomains, " ") != "example.com vinicgobbi.dev.br" {
+		t.Fatalf("bases = %v", env.Paths.BaseDomains)
+	}
+	out.Reset()
+	_ = runCLI(env, "server", "domain", "list")
+	if got := out.String(); !strings.Contains(got, "<app>.vinicgobbi.dev.br") || !strings.Contains(got, "nenhum *.example.com") {
+		t.Fatalf("list:\n%s", got)
+	}
+
+	// Two bases and no TTY: must pick one.
+	if err := runCLI(env, "app", "create", "api", "--type", "static"); err == nil || !strings.Contains(err.Error(), "--base") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := runCLI(env, "app", "create", "api", "--type", "static", "--base", "vinicgobbi.dev.br", "--sub", "api-v2"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := env.P.Domains("api"); strings.Join(got, " ") != "api-v2.vinicgobbi.dev.br" {
+		t.Fatalf("domains = %v", got)
+	}
+
+	// On a terminal it asks: 2 = vinicgobbi.dev.br, empty subdomain keeps
+	// the app name, one extra domain.
+	tty, ttyOut := testEnv(t, "2\n\nwww.loja.vinicgobbi.dev.br\n")
+	tty.Paths, tty.P.Paths = env.Paths, env.Paths
+	if err := runCLI(tty, "app", "create", "loja", "--type", "static"); err != nil {
+		t.Fatalf("%v\n%s", err, ttyOut)
+	}
+	if !strings.Contains(ttyOut.String(), "Qual domínio usar?") {
+		t.Fatalf("no question:\n%s", ttyOut)
+	}
+	if got, _ := tty.P.Domains("loja"); strings.Join(got, " ") != "loja.vinicgobbi.dev.br www.loja.vinicgobbi.dev.br" {
+		t.Fatalf("domains = %v", got)
+	}
+
+	if err := runCLI(env, "server", "domain", "remove", "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, _ := config.Load(env.Paths.ConfigFile); strings.Join(loaded.BaseDomains, " ") != "vinicgobbi.dev.br" {
+		t.Fatalf("config after remove: %v", loaded.BaseDomains)
 	}
 }

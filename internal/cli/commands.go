@@ -3,7 +3,6 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
 	"github.com/vinicgobbi/deploy-tools/internal/validate"
 )
@@ -62,13 +61,18 @@ func appCmd(env *Env) *cobra.Command {
 sites-available. Sem --enable, o vhost não é ativado: revise DNS e
 certificado e depois rode "deploy-tools app enable <app>".
 
+Sem --domain, o app ganha <subdomínio>.<domínio coringa> (cadastrados com
+"deploy-tools server domain add"): com um só, ele é usado direto; com
+vários, o comando pergunta qual (ou use --base/--sub).
+
 O certificado é procurado no servidor (Let's Encrypt, /etc/ssl, /etc/pki/tls,
 pastas do Apache e SSL_SEARCH_DIRS de /etc/deploy-tools.conf): vale o que
 cobrir todos os domínios. Sem nenhum, o site usa o autoassinado do sistema
 até você rodar "deploy-tools app cert <app>".`,
 		Example: `  sudo deploy-tools app create minha-api --type laravel
   sudo deploy-tools app create meu-front --type react --domain app.example.com --domain www.app.example.com --enable
-  sudo deploy-tools app create docs --type static`,
+  sudo deploy-tools app create docs --type static --base vinicgobbi.dev.br            # docs.vinicgobbi.dev.br
+  sudo deploy-tools app create painel --type react --base vinicgobbi.dev.br --sub admin`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) (err error) {
 			if err := env.RequireRoot(); err != nil {
@@ -81,15 +85,21 @@ até você rodar "deploy-tools app cert <app>".`,
 			if create.Type, err = typeFlag(env, create.Type, ex); err != nil {
 				return err
 			}
+			// No domain given and no single base to default to: ask.
+			if env.UI.Interactive && len(create.Domains) == 0 && create.Base == "" && len(env.Paths.BaseDomains) != 1 {
+				if create.Domains, err = chooseDomains(env, create.App, true); err != nil {
+					return err
+				}
+			}
 			return doCreate(env, create)
 		},
 	}
 	createCmd.Flags().StringVarP(&create.Type, "type", "t", "", "laravel | react | static")
-	domainHelp := "domínio; repita ou separe por vírgula para vários, o 1º é o principal (obrigatório sem DOMAIN_SUFFIX em " + config.File + ")"
-	if env.Paths.DomainSuffix != "" {
-		domainHelp = "domínio; repita ou separe por vírgula para vários, o 1º é o principal (padrão: <app>" + env.Paths.DomainSuffix + ")"
-	}
-	createCmd.Flags().StringSliceVarP(&create.Domains, "domain", "d", nil, domainHelp)
+	createCmd.Flags().StringSliceVarP(&create.Domains, "domain", "d", nil,
+		"domínio; repita ou separe por vírgula para vários, o 1º é o principal (padrão: <sub>.<domínio coringa>)")
+	createCmd.Flags().StringVar(&create.Base, "base", "", "domínio coringa cadastrado a usar (server domain list)")
+	createCmd.Flags().StringVar(&create.Sub, "sub", "", "subdomínio no --base (padrão: o nome do app)")
+	createCmd.MarkFlagsMutuallyExclusive("domain", "base")
 	certFlags(createCmd, &create.Cert)
 	createCmd.Flags().BoolVar(&create.MigrateOnDeploy, "migrate-on-deploy", false, "laravel: roda php artisan migrate --force a cada deploy")
 	createCmd.Flags().BoolVar(&create.Enable, "enable", false, "ativa o vhost e recarrega o Apache (com configtest)")
@@ -388,7 +398,7 @@ com --key, autoriza a chave da CI. Idempotente: pode rodar de novo.`,
 			}
 			steps = append(steps,
 				"Configure os secrets no GitHub (veja abaixo; de novo a qualquer hora: deploy-tools key secrets).",
-				"Se quiser domínio padrão ou o certificado real, configure "+config.File+" (DOMAIN_SUFFIX, SSL_CERT_*).",
+				"Cadastre os domínios coringa dos apps: sudo deploy-tools server domain add <domínio>.",
 				"Crie os apps: sudo deploy-tools app create <app> --type laravel|react|static",
 			)
 			env.UI.Steps("Próximos passos", steps...)
@@ -398,6 +408,6 @@ com --key, autoriza a chave da CI. Idempotente: pode rodar de novo.`,
 		},
 	}
 	setup.Flags().StringVar(&key, "key", "", "chave pública da CI a autorizar")
-	srv.AddCommand(setup, certsCmd(env), statusCmd(env))
+	srv.AddCommand(setup, certsCmd(env), statusCmd(env), baseDomainCmd(env))
 	return srv
 }
