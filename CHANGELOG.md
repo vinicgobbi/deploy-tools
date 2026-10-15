@@ -1,3 +1,9 @@
+## v0.11.0 (2026-10-15)
+
+### Feat
+
+- refatoração de usabilidade do deploy-tools e do deploy-dev
+
 ## v0.10.0 (2026-10-15)
 
 ### Feat
