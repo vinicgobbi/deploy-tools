@@ -67,8 +67,8 @@ vários, o comando pergunta qual (ou use --base/--sub).
 
 O certificado é procurado no servidor (Let's Encrypt, /etc/ssl, /etc/pki/tls,
 pastas do Apache e SSL_SEARCH_DIRS de /etc/deploy-tools.conf): vale o que
-cobrir todos os domínios. Sem nenhum, o site usa o autoassinado do sistema
-até você rodar "deploy-tools app cert <app>".`,
+cobrir todos os domínios. Sem nenhum (num terminal, o comando oferece
+informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <app>".`,
 		Example: `  sudo deploy-tools app create minha-api --type laravel
   sudo deploy-tools app create meu-front --type react --domain app.example.com --domain www.app.example.com --enable
   sudo deploy-tools app create docs --type static --base vinicgobbi.dev.br            # docs.vinicgobbi.dev.br
@@ -90,6 +90,9 @@ até você rodar "deploy-tools app cert <app>".`,
 				if create.Domains, err = chooseDomains(env, create.App, true); err != nil {
 					return err
 				}
+			}
+			if err := askCertForApp(env, &create); err != nil {
+				return err
 			}
 			return doCreate(env, create)
 		},

@@ -21,14 +21,17 @@ type VhostData struct {
 	Domains   []string // first is the ServerName, the rest ServerAlias
 	DocRoot   string   // DocumentRoot (…/current or …/current/public)
 	DirRoot   string   // path of the <Directory> block
-	CertFile  string
+	CertFile  string   // "" = no certificate: HTTP only (port 80)
 	CertKey   string
 	CertChain string
 }
 
-// The HTTP vhost redirects each domain to itself over HTTPS, so every
-// alias keeps its own address.
-var vhostTmpl = template.Must(template.New("vhost").Funcs(template.FuncMap{"join": strings.Join}).Parse(`<VirtualHost *:80>
+// With a certificate, the HTTP vhost redirects each domain to itself over
+// HTTPS, so every alias keeps its own address. Without one, the site is
+// served over HTTP only until "app cert" turns HTTPS on (EnableTLS).
+var vhostTmpl = template.Must(template.New("vhost").Funcs(template.FuncMap{"join": strings.Join}).Parse(`
+{{- if .CertFile -}}
+<VirtualHost *:80>
     ServerName {{index .Domains 0}}
 {{- if gt (len .Domains) 1}}
     ServerAlias {{join (slice .Domains 1) " "}}
@@ -55,6 +58,19 @@ var vhostTmpl = template.Must(template.New("vhost").Funcs(template.FuncMap{"join
     ErrorLog ${APACHE_LOG_DIR}/{{.App}}-error.log
     CustomLog ${APACHE_LOG_DIR}/{{.App}}-access.log combined
 </VirtualHost>
+{{- else -}}
+<VirtualHost *:80>
+    ServerName {{index .Domains 0}}
+{{- if gt (len .Domains) 1}}
+    ServerAlias {{join (slice .Domains 1) " "}}
+{{- end}}
+
+    DocumentRoot {{.DocRoot}}
+
+    ErrorLog ${APACHE_LOG_DIR}/{{.App}}-error.log
+    CustomLog ${APACHE_LOG_DIR}/{{.App}}-access.log combined
+</VirtualHost>
+{{- end}}
 {{/*
   +FollowSymLinks is required: DocumentRoot passes through the "current"
   symlink, and for Laravel public/storage -> ../storage/app/public -> the
@@ -242,6 +258,67 @@ func SetCert(content, file, key, chain string) (string, int) {
 		}
 	}
 	return strings.Join(out, "\n"), changed
+}
+
+var (
+	vhost80Re  = regexp.MustCompile(`(?i)^\s*<VirtualHost\s+[^>]*:80\s*>`)
+	vhost443Re = regexp.MustCompile(`(?i)^\s*<VirtualHost\s+[^>]*:443\s*>`)
+)
+
+// HasTLS reports whether the file has an HTTPS (:443 or SSLEngine) block.
+func HasTLS(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if vhost443Re.MatchString(line) || strings.EqualFold(strings.Join(strings.Fields(line), " "), "SSLEngine on") {
+			return true
+		}
+	}
+	return false
+}
+
+// EnableTLS turns an HTTP-only site into HTTPS: the first :80 block is
+// copied, as is (hand edits included), into a new :443 block with the
+// certificate, and the :80 block keeps only its names plus a redirect to
+// HTTPS.
+func EnableTLS(content, file, key, chain string) (string, error) {
+	if HasTLS(content) {
+		return "", errors.New("o site já tem HTTPS")
+	}
+	lines := strings.Split(content, "\n")
+	start, end := -1, -1
+	for i, line := range lines {
+		if start < 0 && vhost80Re.MatchString(line) {
+			start = i
+		} else if start >= 0 && vhostCloseRe.MatchString(line) {
+			end = i
+			break
+		}
+	}
+	if start < 0 || end < 0 {
+		return "", errors.New("nenhum bloco <VirtualHost *:80> no arquivo")
+	}
+	open, body, closing := lines[start], lines[start+1:end], lines[end]
+	const indent = "    "
+	http := []string{open}
+	for _, l := range body {
+		if nameRe.MatchString(l) {
+			http = append(http, l)
+		}
+	}
+	http = append(http, indent+"RewriteEngine On", indent+"RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]", closing)
+
+	https := append([]string{strings.Replace(open, ":80", ":443", 1)}, body...)
+	https = append(https, "", indent+"SSLEngine on", indent+"SSLCertificateFile "+file, indent+"SSLCertificateKeyFile "+key)
+	if chain != "" {
+		https = append(https, indent+"SSLCertificateChainFile "+chain)
+	}
+	https = append(https, closing)
+
+	out := append([]string{}, lines[:start]...)
+	out = append(out, http...)
+	out = append(out, "")
+	out = append(out, https...)
+	out = append(out, lines[end+1:]...)
+	return strings.Join(out, "\n"), nil
 }
 
 // FindVhosts returns the files in sitesEnabled (resolved to their real path,

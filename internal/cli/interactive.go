@@ -142,8 +142,9 @@ func tuiApp(env *Env) tui.App {
 						return "Procura no servidor um certificado válido que cubra todos os domínios do site, com a " +
 							"chave correspondente, e troca no site. Use depois de emitir ou renovar (ex.: certbot).\n\n" +
 							"Procura em: " + strings.Join(env.Paths.CertDirs, ", ") + ".\n\n" +
-							apps("Com certificado provisório:", func(a provision.AppInfo) bool { return a.CertFile == config.FallbackCert },
-								"Nenhum site com o certificado provisório.")
+							apps("Sem HTTPS de verdade:", func(a provision.AppInfo) bool {
+								return a.Vhost != "" && (a.CertFile == "" || a.CertFile == config.FallbackCert)
+							}, "Todos os sites têm certificado.")
 					},
 					CLI: "sudo deploy-tools app cert <app> [--cert arquivo --key arquivo]",
 				},
@@ -277,6 +278,9 @@ func iCreate(env *Env) error {
 		return err
 	}
 	o.Domains = ds
+	if err := askCertForApp(env, &o); err != nil {
+		return err
+	}
 	var fields []huh.Field
 	if o.Type == validate.Laravel {
 		fields = append(fields, huh.NewConfirm().Title("Rodar as migrations do banco a cada deploy?").
@@ -291,10 +295,17 @@ func iCreate(env *Env) error {
 	}
 
 	env.UI.Title("Resumo")
+	https := "sim"
+	if o.Cert.File == "" {
+		if c, _ := env.P.ChooseCert(o.Domains, provision.CertChoice{}); c.Fallback {
+			https = "não (sem certificado: só HTTP)"
+		}
+	}
 	summary := [][2]string{
 		{"app", o.App},
 		{"tipo", typeName(o.Type)},
 		{"domínios", strings.Join(o.Domains, ", ")},
+		{"HTTPS", https},
 		{"no ar agora", yesNo(o.Enable)},
 	}
 	if o.Type == validate.Laravel {
@@ -462,18 +473,21 @@ func iDomains(env *Env) error {
 }
 
 func iCert(env *Env) error {
-	app, err := selectApp(env, "Certificado de qual app?", func(a provision.AppInfo) bool { return a.CertFile != "" }, "nenhum site com HTTPS")
+	app, err := selectApp(env, "Certificado de qual app?", func(a provision.AppInfo) bool { return a.Vhost != "" }, "nenhum app com site no Apache")
 	if err != nil {
 		return err
 	}
 	c, err := env.P.UpdateCert(app, provision.CertChoice{})
-	if err != nil {
+	if err != nil || !c.Fallback {
 		return err
 	}
-	if c.Fallback {
-		env.UI.Warn("Nenhum certificado no servidor cobre os domínios; o site segue com o autoassinado provisório.")
+	given, err := askCert(env, "Nenhum certificado no servidor cobre os domínios. Informar um agora?",
+		"Arquivos PEM já no servidor (ex.: fullchain.pem e privkey.pem).")
+	if err != nil || given.File == "" {
+		return err
 	}
-	return nil
+	_, err = env.P.UpdateCert(app, given)
+	return err
 }
 
 func iAddKey(env *Env) error {

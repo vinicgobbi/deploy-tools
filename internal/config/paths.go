@@ -61,10 +61,14 @@ type Paths struct {
 	// domain is given. With one base it is the default; with several the
 	// CLI asks which one. Empty: --domain is required.
 	BaseDomains []string
-	ConfigFile  string // File; re-rooted by ForRoot so tests can write it
+	BaseCerts   map[string]CertFiles // certificate registered for a base (BASE_CERT), by base
+	ConfigFile  string               // File; re-rooted by ForRoot so tests can write it
 
 	KeepReleases int
 }
+
+// CertFiles is a certificate as Apache takes it.
+type CertFiles struct{ File, Key, Chain string }
 
 func Default() Paths {
 	return Paths{
@@ -114,6 +118,19 @@ func Load(path string) (Paths, error) {
 					p.BaseDomains = append(p.BaseDomains, d)
 				}
 			}
+		case "BASE_CERT": // <base> <cert> <key> [chain]; one line per base
+			f := strings.Fields(val)
+			if len(f) < 3 || len(f) > 4 {
+				return p, fmt.Errorf("%s:%d: BASE_CERT espera <domínio> <certificado> <chave> [cadeia]", path, n)
+			}
+			c := CertFiles{File: f[1], Key: f[2]}
+			if len(f) == 4 {
+				c.Chain = f[3]
+			}
+			if p.BaseCerts == nil {
+				p.BaseCerts = map[string]CertFiles{}
+			}
+			p.BaseCerts[NormalizeBase(f[0])] = c
 		case "DEPLOY_HOST":
 			p.DeployHost = val
 		case "SSL_CERT_FILE":
@@ -144,10 +161,11 @@ func NormalizeBase(d string) string {
 	return strings.TrimSuffix(d, ".")
 }
 
-// SetBaseDomains writes BASE_DOMAINS into the config file at path,
-// replacing the old BASE_DOMAINS/DOMAIN_SUFFIX lines and keeping every
-// other line (comments included). The file is created when missing.
-func SetBaseDomains(path string, domains []string) error {
+// SetBaseDomains writes BASE_DOMAINS and the BASE_CERT lines (for the
+// bases in certs) into the config file at path, replacing the old
+// BASE_DOMAINS/DOMAIN_SUFFIX/BASE_CERT lines and keeping every other line
+// (comments included). The file is created when missing.
+func SetBaseDomains(path string, domains []string, certs map[string]CertFiles) error {
 	var lines []string
 	b, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -158,13 +176,18 @@ func SetBaseDomains(path string, domains []string) error {
 		mode = fi.Mode().Perm()
 	}
 	replaced := false
-	value := "BASE_DOMAINS=" + strings.Join(domains, ",")
+	value := []string{"BASE_DOMAINS=" + strings.Join(domains, ",")}
+	for _, d := range domains {
+		if c, ok := certs[d]; ok && c.File != "" {
+			value = append(value, strings.TrimSpace("BASE_CERT="+d+" "+c.File+" "+c.Key+" "+c.Chain))
+		}
+	}
 	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
 		key, _, _ := strings.Cut(strings.TrimSpace(line), "=")
 		switch strings.TrimSpace(key) {
-		case "BASE_DOMAINS", "DOMAIN_SUFFIX":
+		case "BASE_DOMAINS", "DOMAIN_SUFFIX", "BASE_CERT":
 			if !replaced {
-				lines = append(lines, value)
+				lines = append(lines, value...)
 				replaced = true
 			}
 			continue
@@ -177,7 +200,7 @@ func SetBaseDomains(path string, domains []string) error {
 		if len(lines) == 0 {
 			lines = append(lines, "# deploy-tools (veja o README)")
 		}
-		lines = append(lines, "# Domínios coringa: os apps ganham <subdomínio>.<domínio>", value)
+		lines = append(append(lines, "# Domínios coringa: os apps ganham <subdomínio>.<domínio>"), value...)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

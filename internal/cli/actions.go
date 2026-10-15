@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/huh"
 
 	"github.com/vinicgobbi/deploy-tools/internal/appconf"
-	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
 	"github.com/vinicgobbi/deploy-tools/internal/release"
 	"github.com/vinicgobbi/deploy-tools/internal/ui"
@@ -59,15 +58,20 @@ func doCreate(env *Env, o provision.CreateOptions) error {
 	env.UI.KV(
 		[2]string{"pasta", appDir + "  " + env.UI.Faint("(a 1ª release chega no 1º deploy)")},
 		[2]string{"site Apache", env.Paths.VhostFile(o.App)},
-		[2]string{"endereço", "https://" + strings.Join(o.Domains, "  https://")},
 	)
+	info, _ := env.P.App(o.App)
+	scheme := "https://"
+	if info.CertFile == "" {
+		scheme = "http://"
+	}
+	env.UI.KV([2]string{"endereço", scheme + strings.Join(o.Domains, "  "+scheme)})
 	var steps []string
 	if !o.Enable {
 		steps = append(steps, "Revise "+env.Paths.VhostFile(o.App)+" (domínio, certificado).")
 	}
 	steps = append(steps, "Confirme que o DNS de "+strings.Join(o.Domains, ", ")+" aponta para cá.")
-	if info, _ := env.P.App(o.App); info.CertFile == config.FallbackCert {
-		steps = append(steps, "Emita um certificado para os domínios (ex.: certbot certonly --webroot) e rode `sudo deploy-tools app cert "+o.App+"`.")
+	if info.CertFile == "" {
+		steps = append(steps, "O site está só em HTTP. Emita um certificado (ex.: certbot certonly --webroot) e rode `sudo deploy-tools app cert "+o.App+"`.")
 	}
 	if o.Type == validate.Laravel {
 		steps = append(steps, "Preencha "+filepath.Join(env.Paths.SharedDir(o.App), ".env")+".")

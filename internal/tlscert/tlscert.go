@@ -185,6 +185,39 @@ func Find(dirs, domains []string, now time.Time) (Cert, bool) {
 	return Cert{}, false
 }
 
+// CheckPair validates files the operator pointed at: the certificate
+// parses, the key is its private key and the chain (optional) parses.
+func CheckPair(certFile, keyFile, chainFile string) (Cert, error) {
+	chain, err := parseCerts(certFile)
+	if err != nil {
+		return Cert{}, err
+	}
+	if len(chain) == 0 {
+		return Cert{}, fmt.Errorf("%s: nenhum certificado PEM", certFile)
+	}
+	b, err := os.ReadFile(keyFile)
+	if err != nil {
+		return Cert{}, err
+	}
+	pub, err := publicKeyOf(b)
+	if err != nil {
+		return Cert{}, fmt.Errorf("%s: %w", keyFile, err)
+	}
+	if !samePublicKey(pub, chain[0].PublicKey) {
+		return Cert{}, fmt.Errorf("%s não é a chave privada de %s", keyFile, certFile)
+	}
+	if chainFile != "" {
+		if cs, err := parseCerts(chainFile); err != nil {
+			return Cert{}, err
+		} else if len(cs) == 0 {
+			return Cert{}, fmt.Errorf("%s: nenhum certificado PEM", chainFile)
+		}
+	}
+	c := certOf(chain[0])
+	c.File, c.Key, c.Chain = certFile, keyFile, chainFile
+	return c, nil
+}
+
 // Inspect reads a certificate that the operator pointed at explicitly.
 func Inspect(file string) (Cert, error) {
 	chain, err := parseCerts(file)

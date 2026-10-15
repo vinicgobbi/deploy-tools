@@ -13,6 +13,7 @@ import (
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
 	"github.com/vinicgobbi/deploy-tools/internal/run"
+	"github.com/vinicgobbi/deploy-tools/internal/tlscert/tlstest"
 	"github.com/vinicgobbi/deploy-tools/internal/ui"
 )
 
@@ -163,9 +164,9 @@ func TestConfigDetectsType(t *testing.T) {
 func TestInteractiveCreate(t *testing.T) {
 	// 1 = Criar app. Then name, type (1 = Laravel), domain (1 = the
 	// example.com base; empty subdomain keeps the app name; no extra
-	// domains), migrations y, enable n, confirm y. The menu comes back
+	// domains), no certificate (n), migrations y, enable n, confirm y. The menu comes back
 	// below the result: 18 = Sair.
-	answers := strings.Join([]string{"1", "minha-api", "1", "1", "", "", "y", "n", "y", "18"}, "\n") + "\n"
+	answers := strings.Join([]string{"1", "minha-api", "1", "1", "", "", "n", "y", "n", "y", "18"}, "\n") + "\n"
 	env, out := testEnv(t, answers)
 	env.UI.ClearScreen = true
 	if err := runCLI(env); err != nil {
@@ -234,7 +235,7 @@ func TestStatusCard(t *testing.T) {
 	if err := runCLI(env, "app", "status", "api"); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"site desativado", "https://api.example.com", "Laravel · migrations a cada deploy: não",
+	for _, want := range []string{"site desativado", "http://api.example.com", "site só em HTTP", "Laravel · migrations a cada deploy: não",
 		"a99d021 · há 3 h  (ativa)", "db4e609 · há 2 dias", "sudo deploy-tools app enable api"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("faltou %q:\n%s", want, out)
@@ -375,7 +376,7 @@ func TestDomainCommands(t *testing.T) {
 	if err := runCLI(env, "app", "status", "loja"); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "https://shop.example.org") || !strings.Contains(got, "autoassinado provisório") {
+	if got := out.String(); !strings.Contains(got, "http://shop.example.org") || !strings.Contains(got, "site só em HTTP") {
 		t.Fatalf("status:\n%s", got)
 	}
 	if err := runCLI(env, "app", "cert", "loja", "--cert", "/x.crt"); err == nil {
@@ -517,5 +518,24 @@ func TestBaseDomainCommandsAndCreate(t *testing.T) {
 	}
 	if loaded, _ := config.Load(env.Paths.ConfigFile); strings.Join(loaded.BaseDomains, " ") != "vinicgobbi.dev.br" {
 		t.Fatalf("config after remove: %v", loaded.BaseDomains)
+	}
+}
+
+func TestBaseDomainAddAsksForCertificate(t *testing.T) {
+	dir := t.TempDir()
+	full := tlstest.LetsEncrypt(t, dir, "wild", []string{"*.vinicgobbi.dev.br"}, time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
+	key := filepath.Join(filepath.Dir(full), "privkey.pem")
+	env, out := testEnv(t, "y\n"+full+"\n"+key+"\n\n")
+	if err := runCLI(env, "server", "domain", "add", "vinicgobbi.dev.br"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "Cadastrar um certificado TLS para *.vinicgobbi.dev.br?") {
+		t.Fatalf("no question:\n%s", out)
+	}
+	if loaded, _ := config.Load(env.Paths.ConfigFile); loaded.BaseCerts["vinicgobbi.dev.br"].Key != key {
+		t.Fatalf("cert not saved: %+v\n%s", loaded.BaseCerts, out)
+	}
+	if c, ok := env.P.WildcardCert("vinicgobbi.dev.br"); !ok || c.File != full {
+		t.Fatalf("WildcardCert = %+v %v", c, ok)
 	}
 }

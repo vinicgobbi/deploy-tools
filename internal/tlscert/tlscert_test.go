@@ -148,3 +148,25 @@ func TestScanSkipsCertWithoutKey(t *testing.T) {
 		t.Fatalf("Scan = %+v", got)
 	}
 }
+
+func TestCheckPair(t *testing.T) {
+	root := t.TempDir()
+	ca := issue(t, nil, true, nil, now.AddDate(5, 0, 0))
+	leaf := issue(t, ca, false, []string{"*.example.com"}, now.AddDate(1, 0, 0))
+	other := issue(t, ca, false, []string{"x.example.com"}, now.AddDate(1, 0, 0))
+	writePEM(t, filepath.Join(root, "c.pem"), leaf)
+	writePEM(t, filepath.Join(root, "ca.pem"), ca)
+	writeKey(t, filepath.Join(root, "c.key"), leaf)
+	writeKey(t, filepath.Join(root, "other.key"), other)
+
+	c, err := CheckPair(filepath.Join(root, "c.pem"), filepath.Join(root, "c.key"), filepath.Join(root, "ca.pem"))
+	if err != nil || !c.Covers([]string{"api.example.com"}) || c.Chain == "" {
+		t.Fatalf("CheckPair = %+v, %v", c, err)
+	}
+	if _, err := CheckPair(filepath.Join(root, "c.pem"), filepath.Join(root, "other.key"), ""); err == nil {
+		t.Fatal("mismatched key accepted")
+	}
+	if _, err := CheckPair(filepath.Join(root, "c.key"), filepath.Join(root, "c.key"), ""); err == nil {
+		t.Fatal("key file accepted as certificate")
+	}
+}

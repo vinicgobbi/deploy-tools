@@ -49,7 +49,7 @@ func TestLoadRejectsUnknownKey(t *testing.T) {
 
 func TestSetBaseDomains(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "etc", "deploy-tools.conf")
-	if err := SetBaseDomains(path, []string{"a.example.com"}); err != nil {
+	if err := SetBaseDomains(path, []string{"a.example.com"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := Load(path); err != nil || strings.Join(p.BaseDomains, " ") != "a.example.com" {
@@ -61,13 +61,18 @@ func TestSetBaseDomains(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = os.Chmod(path, 0o640)
-	if err := SetBaseDomains(path, []string{"old.com", "vinicgobbi.dev.br"}); err != nil {
+	certs := map[string]CertFiles{"vinicgobbi.dev.br": {File: "/le/fullchain.pem", Key: "/le/privkey.pem"}, "gone.com": {File: "/x", Key: "/y"}}
+	if err := SetBaseDomains(path, []string{"old.com", "vinicgobbi.dev.br"}, certs); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(path)
-	want := "# meu servidor\nDEPLOY_HOST=srv\nBASE_DOMAINS=old.com,vinicgobbi.dev.br\n\n# cert\nSSL_CERT_FILE=/c.pem\n"
+	want := "# meu servidor\nDEPLOY_HOST=srv\nBASE_DOMAINS=old.com,vinicgobbi.dev.br\n" +
+		"BASE_CERT=vinicgobbi.dev.br /le/fullchain.pem /le/privkey.pem\n\n# cert\nSSL_CERT_FILE=/c.pem\n"
 	if string(b) != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", b, want)
+	}
+	if p, err := Load(path); err != nil || p.BaseCerts["vinicgobbi.dev.br"].Key != "/le/privkey.pem" || len(p.BaseCerts) != 1 {
+		t.Fatalf("reload: %+v %v", p.BaseCerts, err)
 	}
 	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o640 {
 		t.Fatalf("mode = %v", fi.Mode().Perm())

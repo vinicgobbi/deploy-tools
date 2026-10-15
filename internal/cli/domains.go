@@ -123,7 +123,8 @@ Nunca troca um certificado real pelo autoassinado provisório.`,
 				return err
 			}
 			if got.Fallback {
-				env.UI.Warn("Nenhum certificado no servidor cobre os domínios; o site segue com o autoassinado provisório.")
+				env.UI.Warn("Nenhum certificado no servidor cobre os domínios; o site segue como estava (sem HTTPS, se não tinha).")
+				env.UI.Hint("Informe os arquivos: sudo deploy-tools app cert %s --cert <arquivo> --key <arquivo>", a)
 				return nil
 			}
 			env.UI.OK("Certificado do site: %s", got.File)

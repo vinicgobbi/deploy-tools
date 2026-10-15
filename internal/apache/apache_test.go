@@ -203,3 +203,41 @@ func TestSetCert(t *testing.T) {
 		t.Fatal("no SSL block should change nothing")
 	}
 }
+
+func TestRenderHTTPOnlyAndEnableTLS(t *testing.T) {
+	d := VhostData{
+		App: "app", Type: "react", Domains: []string{"app.example.com", "www.app.example.com"},
+		DocRoot: "/var/www/app/current", DirRoot: "/var/www/app",
+	}
+	http, err := Render(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "vhost-react-http.conf", http)
+	if HasTLS(http) || strings.Contains(http, ":443") {
+		t.Fatalf("HTTP-only vhost has TLS:\n%s", http)
+	}
+
+	// A hand edit inside the :80 block must survive the conversion.
+	edited := strings.Replace(http, "    DocumentRoot", "    Header set X-Custom yes\n    DocumentRoot", 1)
+	got, err := EnableTLS(edited, "/le/fullchain.pem", "/le/privkey.pem", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{
+		"<VirtualHost *:80>\n    ServerName app.example.com\n    ServerAlias www.app.example.com\n    RewriteEngine On\n",
+		"<VirtualHost *:443>\n    ServerName app.example.com\n    ServerAlias www.app.example.com\n\n    Header set X-Custom yes\n",
+		"    SSLEngine on\n    SSLCertificateFile /le/fullchain.pem\n    SSLCertificateKeyFile /le/privkey.pem\n</VirtualHost>",
+		"<Directory /var/www/app/>",
+	} {
+		if !strings.Contains(got, part) {
+			t.Fatalf("missing %q in:\n%s", part, got)
+		}
+	}
+	if f, k, _ := CertFiles(got); f != "/le/fullchain.pem" || k != "/le/privkey.pem" || !HasTLS(got) {
+		t.Fatalf("cert = %q %q", f, k)
+	}
+	if _, err := EnableTLS(got, "/a", "/b", ""); err == nil {
+		t.Fatal("EnableTLS twice must fail")
+	}
+}

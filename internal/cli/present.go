@@ -136,11 +136,18 @@ func printAppCard(env *Env, info provision.AppInfo) {
 		if i == 0 {
 			label = "endereço"
 		}
-		pairs = append(pairs, [2]string{label, "https://" + d})
+		scheme := "https://"
+		if info.CertFile == "" {
+			scheme = "http://"
+		}
+		pairs = append(pairs, [2]string{label, scheme + d})
 	}
-	if info.CertFile != "" {
+	if info.Vhost != "" {
 		cert := info.CertFile
-		if info.CertFile == config.FallbackCert {
+		switch cert {
+		case "":
+			cert = "nenhum — site só em HTTP  " + env.UI.Faint("(com o certificado instalado: sudo deploy-tools app cert "+info.Name+")")
+		case config.FallbackCert:
 			cert += "  " + env.UI.Faint("(autoassinado provisório — sudo deploy-tools app cert "+info.Name+")")
 		}
 		pairs = append(pairs, [2]string{"certificado", cert})

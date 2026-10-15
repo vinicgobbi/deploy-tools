@@ -1,6 +1,7 @@
 package provision
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,6 +9,43 @@ import (
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/tlscert/tlstest"
 )
+
+func TestBaseDomainWithRegisteredCert(t *testing.T) {
+	p, _ := newP(t)
+	p.Paths.BaseDomains = nil
+	// Outside every searched directory: only usable because it is registered.
+	elsewhere := t.TempDir()
+	full := tlstest.LetsEncrypt(t, elsewhere, "wild", []string{"vinicgobbi.dev.br", "*.vinicgobbi.dev.br"}, future)
+	key := filepath.Join(filepath.Dir(full), "privkey.pem")
+	narrow := tlstest.LetsEncrypt(t, elsewhere, "narrow", []string{"x.vinicgobbi.dev.br"}, future)
+
+	if _, err := p.AddBaseDomain("vinicgobbi.dev.br", config.CertFiles{File: narrow, Key: key}); err == nil {
+		t.Fatal("key of another certificate accepted")
+	}
+	if _, err := p.AddBaseDomain("vinicgobbi.dev.br", config.CertFiles{File: narrow, Key: filepath.Join(filepath.Dir(narrow), "privkey.pem")}); err == nil ||
+		!strings.Contains(err.Error(), "não é coringa") {
+		t.Fatalf("non-wildcard accepted: %v", err)
+	}
+	if ok, err := p.AddBaseDomain("vinicgobbi.dev.br", config.CertFiles{File: full, Key: key}); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if loaded, _ := config.Load(p.Paths.ConfigFile); loaded.BaseCerts["vinicgobbi.dev.br"].File != full {
+		t.Fatalf("not saved: %+v", loaded.BaseCerts)
+	}
+	if err := p.Create(CreateOptions{App: "api", Type: "static"}); err != nil {
+		t.Fatal(err)
+	}
+	vhost := read(t, p.Paths.VhostFile("api"))
+	if f, k, _ := apache.CertFiles(vhost); f != full || k != key || !apache.HasTLS(vhost) {
+		t.Fatalf("cert = %q %q", f, k)
+	}
+	if err := p.RemoveBaseDomain("vinicgobbi.dev.br"); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, _ := config.Load(p.Paths.ConfigFile); len(loaded.BaseCerts) != 0 {
+		t.Fatalf("cert left behind: %+v", loaded.BaseCerts)
+	}
+}
 
 func TestCreateWithBaseDomains(t *testing.T) {
 	p, _ := newP(t)
@@ -43,15 +81,15 @@ func TestCreateWithBaseDomains(t *testing.T) {
 func TestAddRemoveBaseDomain(t *testing.T) {
 	p, _ := newP(t)
 	p.Paths.BaseDomains = nil
-	if err := p.AddBaseDomain("*.vinicgobbi.dev.br"); err != nil {
-		t.Fatal(err)
+	if ok, err := p.AddBaseDomain("*.vinicgobbi.dev.br", config.CertFiles{}); err != nil || ok {
+		t.Fatal(ok, err)
 	}
-	if !strings.Contains(p.Out.(interface{ String() string }).String(), "nenhum certificado *.vinicgobbi.dev.br") {
+	if !strings.Contains(p.Out.(interface{ String() string }).String(), "Nenhum certificado *.vinicgobbi.dev.br") {
 		t.Fatalf("out: %s", p.Out)
 	}
 	tlstest.LetsEncrypt(t, p.Paths.CertDirs[0], "wild", []string{"*.example.org"}, future)
-	if err := p.AddBaseDomain("example.org"); err != nil {
-		t.Fatal(err)
+	if ok, err := p.AddBaseDomain("example.org", config.CertFiles{}); err != nil || !ok {
+		t.Fatal(ok, err)
 	}
 	if !strings.Contains(p.Out.(interface{ String() string }).String(), "Certificado coringa encontrado") {
 		t.Fatalf("out: %s", p.Out)
@@ -60,7 +98,7 @@ func TestAddRemoveBaseDomain(t *testing.T) {
 	if err != nil || strings.Join(loaded.BaseDomains, " ") != "vinicgobbi.dev.br example.org" {
 		t.Fatalf("config: %v %v", loaded.BaseDomains, err)
 	}
-	if err := p.AddBaseDomain("bad domain"); err == nil {
+	if _, err := p.AddBaseDomain("bad domain", config.CertFiles{}); err == nil {
 		t.Fatal("invalid domain accepted")
 	}
 	if err := p.RemoveBaseDomain("vinicgobbi.dev.br"); err != nil {

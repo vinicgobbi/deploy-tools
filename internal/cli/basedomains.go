@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
+	"github.com/vinicgobbi/deploy-tools/internal/tlscert"
 	"github.com/vinicgobbi/deploy-tools/internal/validate"
 )
 
@@ -87,6 +89,73 @@ func chooseDomains(env *Env, app string, extras bool) ([]string, error) {
 	return provision.NormalizeDomains([]string{s}), nil
 }
 
+// askCert offers to register certificate files already on the server;
+// a zero CertChoice means the operator declined.
+func askCert(env *Env, question, description string) (provision.CertChoice, error) {
+	ok, err := env.UI.ConfirmDefault(question, description, false)
+	if err != nil || !ok {
+		return provision.CertChoice{}, err
+	}
+	var c provision.CertChoice
+	if err := env.UI.Input("Certificado (arquivo PEM, com a cadeia ou não)", "/etc/ssl/certs/exemplo.crt", &c.File, fileExists); err != nil {
+		return c, err
+	}
+	if err := env.UI.Input("Chave privada", "/etc/ssl/private/exemplo.key", &c.Key, fileExists); err != nil {
+		return c, err
+	}
+	if err := env.UI.Input("Cadeia / CA bundle (opcional)", "", &c.Chain, func(s string) error {
+		if s == "" {
+			return nil
+		}
+		return fileExists(s)
+	}); err != nil {
+		return c, err
+	}
+	if _, err := tlscert.CheckPair(c.File, c.Key, c.Chain); err != nil {
+		return provision.CertChoice{}, err
+	}
+	return c, nil
+}
+
+// addBaseDomain registers d and, on a terminal with no certificate for
+// *.d, offers to register one.
+func addBaseDomain(env *Env, d string, cert config.CertFiles) error {
+	ok, err := env.P.AddBaseDomain(d, cert)
+	if err != nil || ok || cert.File != "" || !env.UI.Interactive {
+		return err
+	}
+	d = config.NormalizeBase(d)
+	c, err := askCert(env, "Cadastrar um certificado TLS para *."+d+"?",
+		"Arquivos PEM já no servidor. Sem certificado, os apps em "+d+" ficam só em HTTP.")
+	if err != nil || c.File == "" {
+		return err
+	}
+	_, err = env.P.AddBaseDomain(d, config.CertFiles{File: c.File, Key: c.Key, Chain: c.Chain})
+	return err
+}
+
+// askCertForApp offers a certificate when none covers the new app's
+// domains (the site would be HTTP only).
+func askCertForApp(env *Env, o *provision.CreateOptions) error {
+	if !env.UI.Interactive || o.Cert.File != "" {
+		return nil
+	}
+	o.Defaults(env.Paths.BaseDomains)
+	if len(o.Domains) == 0 {
+		return nil
+	}
+	if c, err := env.P.ChooseCert(o.Domains, provision.CertChoice{}); err != nil || !c.Fallback {
+		return err
+	}
+	c, err := askCert(env, "Nenhum certificado cobre "+strings.Join(o.Domains, ", ")+". Informar um agora?",
+		"Arquivos PEM já no servidor. Sem certificado, o site fica só em HTTP (porta 80) até você rodar `app cert`.")
+	if err != nil {
+		return err
+	}
+	o.Cert = c
+	return nil
+}
+
 func doBaseDomains(env *Env) error {
 	if len(env.Paths.BaseDomains) == 0 {
 		env.UI.Println("Nenhum domínio coringa cadastrado.")
@@ -119,8 +188,9 @@ ele é usado direto; com vários, o deploy-tools pergunta qual usar (ou use
 --base e --sub).
 
 Ficam em BASE_DOMAINS de ` + config.File + `. Ao cadastrar, o comando diz
-se há um certificado *.<domínio> no servidor: com ele, todo app novo no
-domínio já sai com HTTPS válido.`,
+se há um certificado *.<domínio> no servidor (ou grava o que você informar
+com --cert/--key): com ele, todo app novo no domínio já sai com HTTPS.
+Sem certificado, os apps ficam só em HTTP até você rodar "app cert".`,
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:     "list",
@@ -129,24 +199,37 @@ domínio já sai com HTTPS válido.`,
 		Args:    cobra.NoArgs,
 		RunE:    func(*cobra.Command, []string) error { return doBaseDomains(env) },
 	})
-	cmd.AddCommand(&cobra.Command{
-		Use:     "add <domínio>...",
-		Short:   "Cadastra um ou mais domínios coringa",
-		Example: "  sudo deploy-tools server domain add vinicgobbi.dev.br\n  sudo deploy-tools server domain add '*.example.com'",
-		Args:    cobra.MinimumNArgs(1),
+	var cert provision.CertChoice
+	add := &cobra.Command{
+		Use:   "add <domínio>...",
+		Short: "Cadastra um ou mais domínios coringa (e o certificado *.<domínio>)",
+		Long: `Cadastra domínios coringa. Com --cert/--key, grava também o certificado
+*.<domínio> (validado: a chave precisa ser dele, ele precisa estar válido e
+ser coringa do domínio). Num domínio já cadastrado, --cert troca o
+certificado. Sem --cert, num terminal, se não houver certificado *.<domínio>
+no servidor, o comando pergunta se você quer informar um.`,
+		Example: `  sudo deploy-tools server domain add vinicgobbi.dev.br
+  sudo deploy-tools server domain add '*.example.com'
+  sudo deploy-tools server domain add vinicgobbi.dev.br --cert /etc/ssl/certs/wild.crt --key /etc/ssl/private/wild.key`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if err := env.RequireRoot(); err != nil {
 				return err
 			}
+			if cert.File != "" && len(args) > 1 {
+				return errors.New("--cert vale para um domínio só")
+			}
 			defer syncPaths(env)
 			for _, d := range args {
-				if err := env.P.AddBaseDomain(d); err != nil {
+				if err := addBaseDomain(env, d, config.CertFiles{File: cert.File, Key: cert.Key, Chain: cert.Chain}); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
-	})
+	}
+	certFlags(add, &cert)
+	cmd.AddCommand(add)
 	cmd.AddCommand(&cobra.Command{
 		Use:     "remove <domínio>...",
 		Aliases: []string{"rm"},
@@ -191,7 +274,7 @@ func iBaseDomains(env *Env) error {
 		}); err != nil {
 			return err
 		}
-		return env.P.AddBaseDomain(d)
+		return addBaseDomain(env, d, config.CertFiles{})
 	case "remove":
 		d := env.Paths.BaseDomains[0]
 		ro := make([]huh.Option[string], 0, len(env.Paths.BaseDomains))

@@ -19,7 +19,7 @@ type CertChoice struct {
 	File, Key, Chain string
 
 	Source   string    // human description of how it was chosen
-	Fallback bool      // the provisional self-signed certificate
+	Fallback bool      // no certificate covers the domains: File is "" and the site is HTTP only
 	Missing  []string  // domains it does not cover
 	NotAfter time.Time // zero when unknown
 }
@@ -58,9 +58,10 @@ func (p *Provisioner) now() time.Time {
 }
 
 // ChooseCert picks the certificate for domains, in this order: the one the
-// operator passed (override), the fixed one in /etc/deploy-tools.conf, one
-// found on disk that covers every domain, and finally the self-signed
-// fallback so Apache can still start.
+// operator passed (override), the fixed one in /etc/deploy-tools.conf, the
+// one registered for a base domain (BASE_CERT) that covers every domain,
+// and one found on disk that does. With none, Fallback is set and the site
+// is served over HTTP only.
 func (p *Provisioner) ChooseCert(domains []string, override CertChoice) (CertChoice, error) {
 	inspect := func(c CertChoice) CertChoice {
 		if info, err := tlscert.Inspect(c.File); err == nil {
@@ -86,16 +87,27 @@ func (p *Provisioner) ChooseCert(domains []string, override CertChoice) (CertCho
 			Source: "fixo em " + config.File,
 		}), nil
 	}
+	for _, b := range p.Paths.BaseDomains {
+		bc, ok := p.Paths.BaseCerts[b]
+		if !ok {
+			continue
+		}
+		if info, err := tlscert.Inspect(bc.File); err == nil && p.now().Before(info.NotAfter) && info.Covers(domains) {
+			return CertChoice{File: bc.File, Key: bc.Key, Chain: bc.Chain, Source: "coringa cadastrado para " + b, NotAfter: info.NotAfter}, nil
+		}
+	}
 	if c, ok := tlscert.Find(p.Paths.CertDirs, domains, p.now()); ok {
 		return CertChoice{File: c.File, Key: c.Key, Chain: c.Chain, Source: "encontrado automaticamente", NotAfter: c.NotAfter}, nil
 	}
-	return CertChoice{
-		File: config.FallbackCert, Key: config.FallbackKey,
-		Source: "autoassinado provisório (nenhum certificado no servidor cobre os domínios)", Fallback: true, Missing: domains,
-	}, nil
+	return CertChoice{Source: "nenhum", Fallback: true, Missing: domains}, nil
 }
 
 func (p *Provisioner) sayCert(c CertChoice) {
+	if c.Fallback {
+		p.say("Nenhum certificado cobre %s: o site fica só em HTTP (porta 80). "+
+			"Depois de instalar um, rode `deploy-tools app cert` para ativar o HTTPS.", strings.Join(c.Missing, ", "))
+		return
+	}
 	p.say("Certificado %s: %s", c.Source, c.File)
 	if !c.NotAfter.IsZero() {
 		p.say("Válido até %s.", c.NotAfter.Format("02/01/2006"))
@@ -180,7 +192,20 @@ func (p *Provisioner) SetDomains(app string, domains []string) error {
 		return fmt.Errorf("%s: %w", info.Vhost, err)
 	}
 
-	if file, _, _ := apache.CertFiles(content); file != "" {
+	if !apache.HasTLS(content) {
+		// HTTP only: turn HTTPS on if a certificate now covers the domains.
+		c, err := p.ChooseCert(domains, CertChoice{})
+		if err != nil {
+			return err
+		}
+		if !c.Fallback {
+			if content, err = apache.EnableTLS(content, c.File, c.Key, c.Chain); err != nil {
+				return fmt.Errorf("%s: %w", info.Vhost, err)
+			}
+			p.say("HTTPS ativado.")
+			p.sayCert(c)
+		}
+	} else if file, _, _ := apache.CertFiles(content); file != "" {
 		var missing []string
 		if cur, err := tlscert.Inspect(file); err == nil {
 			missing = tlscert.Missing(cur, domains)
@@ -208,8 +233,8 @@ func (p *Provisioner) SetDomains(app string, domains []string) error {
 }
 
 // UpdateCert points app's site at override, or at the best certificate
-// found for its domains. It never swaps a real certificate for the
-// self-signed fallback.
+// found for its domains; an HTTP-only site gets HTTPS (EnableTLS). It never
+// takes HTTPS away from a site that has a certificate.
 func (p *Provisioner) UpdateCert(app string, override CertChoice) (CertChoice, error) {
 	info, err := p.vhostOf(app)
 	if err != nil {
@@ -230,13 +255,29 @@ func (p *Provisioner) UpdateCert(app string, override CertChoice) (CertChoice, e
 		return c, fmt.Errorf("nenhum certificado no servidor cobre %s — o atual (%s) foi mantido. "+
 			"Emita um (ex.: certbot certonly) ou informe --cert/--key", strings.Join(domains, ", "), curFile)
 	}
+	if c.Fallback {
+		if curFile == "" {
+			p.say("Nenhum certificado cobre %s: o site segue só em HTTP.", strings.Join(domains, ", "))
+		} else {
+			p.say("Nenhum certificado cobre %s: o site segue com %s.", strings.Join(domains, ", "), curFile)
+		}
+		return c, nil
+	}
 	if c.File == curFile && c.Key == curKey && c.Chain == curChain {
 		p.say("O site já usa %s.", c.File)
 		return c, nil
 	}
-	content, n := apache.SetCert(old, c.File, c.Key, c.Chain)
-	if n == 0 {
-		return c, fmt.Errorf("%s não tem bloco SSL (SSLCertificateFile) para atualizar", info.Vhost)
+	var content string
+	if !apache.HasTLS(old) {
+		if content, err = apache.EnableTLS(old, c.File, c.Key, c.Chain); err != nil {
+			return c, fmt.Errorf("%s: %w", info.Vhost, err)
+		}
+		p.say("HTTPS ativado.")
+	} else {
+		var n int
+		if content, n = apache.SetCert(old, c.File, c.Key, c.Chain); n == 0 {
+			return c, fmt.Errorf("%s não tem bloco SSL (SSLCertificateFile) para atualizar", info.Vhost)
+		}
 	}
 	if err := p.rewriteVhost(info, old, content); err != nil {
 		return c, err

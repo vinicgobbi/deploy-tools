@@ -93,8 +93,11 @@ nunca executado como script.
 # Endereço pelo qual o runner do GitHub alcança o servidor (secret DEPLOY_HOST)
 DEPLOY_HOST=deploy.example.com
 
-# Domínio padrão: "app create api" sem --domain vira api.example.com
-DOMAIN_SUFFIX=example.com
+# Domínios coringa (gerenciados com "deploy-tools server domain"):
+# "app create api" sem --domain vira api.<um deles>
+BASE_DOMAINS=vinicgobbi.dev.br,example.com
+# Certificado *.<domínio> de um coringa: <domínio> <certificado> <chave> [cadeia]
+BASE_CERT=vinicgobbi.dev.br /etc/letsencrypt/live/vinicgobbi.dev.br/fullchain.pem /etc/letsencrypt/live/vinicgobbi.dev.br/privkey.pem
 
 # Pastas extras onde procurar certificados (antes das padrão)
 SSL_SEARCH_DIRS=/srv/certs:/opt/tls
@@ -105,7 +108,8 @@ SSL_SEARCH_DIRS=/srv/certs:/opt/tls
 #SSL_CERT_CHAIN=/etc/ssl/certs/wildcard.example.com.ca-bundle
 ```
 
-Sem `DOMAIN_SUFFIX`, o `app create` exige `--domain`.
+Sem domínio coringa, o `app create` exige `--domain`. O `DOMAIN_SUFFIX` das
+versões anteriores continua aceito, como um domínio coringa.
 
 ## Certificados TLS
 
@@ -133,11 +137,22 @@ Se o certificado não tiver a cadeia embutida, o `deploy-tools` procura um
 CA bundle que o assine (de preferência na mesma pasta) e usa como
 `SSLCertificateChainFile`.
 
-A ordem de prioridade é: `--cert/--key` informados no comando, depois
-`SSL_CERT_FILE` do `/etc/deploy-tools.conf`, depois a busca automática. Se
-nada servir, o site é criado com o certificado autoassinado do sistema
-(`ssl-cert-snakeoil`, do pacote `ssl-cert`), só para o Apache subir. O
-`app status` avisa quando um site está nesse estado.
+A ordem de prioridade é:
+
+1. `--cert/--key` informados no comando (num terminal, o `app create`
+   também pergunta se você quer informar um quando nenhum cobre os
+   domínios);
+2. `SSL_CERT_FILE` do `/etc/deploy-tools.conf`;
+3. o certificado cadastrado para o domínio coringa (`BASE_CERT`), se cobrir
+   os domínios;
+4. a busca automática.
+
+**Sem certificado, o site fica só em HTTP**: o vhost tem apenas o
+`<VirtualHost *:80>`, sem redirecionamento. O `app status` mostra o endereço
+`http://` e avisa. Quando o certificado existir, o `app cert` (ou adicionar
+um domínio que ele cubra) converte o vhost para HTTPS: o bloco da porta 80
+vira um redirecionamento, e o conteúdo dele, inclusive edições feitas à
+mão, passa para um novo bloco `*:443` com o certificado.
 
 Depois de emitir ou renovar um certificado:
 
@@ -147,8 +162,9 @@ sudo deploy-tools app cert minha-api      # procura de novo e troca no site
 sudo deploy-tools server certs            # lista o que foi encontrado, com domínios e validade
 ```
 
-O `app cert` nunca troca um certificado real pelo autoassinado. Se nada
-cobrir os domínios, o certificado atual é mantido e o comando avisa.
+O `app cert` nunca tira o HTTPS de um site. Se nada cobrir os domínios, o
+certificado atual é mantido e o comando avisa. Num terminal (ou na TUI), ele
+oferece informar os arquivos do certificado.
 
 ## Domínios
 
@@ -170,6 +186,34 @@ mantém o atual e avisa quais domínios ficaram descobertos. Um site ativo é
 alterado com a mesma sequência segura do `enable`: configtest antes e
 depois, reload só se passar e o vhost anterior restaurado em caso de falha.
 O resto do arquivo (edições feitas à mão) é preservado.
+
+## Domínios coringa
+
+Cadastre os domínios base, como `vinicgobbi.dev.br`, e cada app novo ganha
+`<subdomínio>.<domínio>` sem precisar de `--domain`:
+
+```bash
+sudo deploy-tools server domain add vinicgobbi.dev.br
+sudo deploy-tools server domain add example.com --cert /etc/ssl/certs/wild.crt --key /etc/ssl/private/wild.key
+deploy-tools server domain list
+sudo deploy-tools server domain remove example.com     # os sites que já usam não mudam
+```
+
+Ao cadastrar, o comando diz se há um certificado `*.<domínio>` no servidor.
+Se não houver, num terminal (ou na TUI, em "Domínios coringa"), ele pergunta
+se você quer informar um. O certificado informado é validado: a chave
+precisa ser dele, ele precisa estar dentro da validade e ser coringa do
+domínio. Depois fica gravado em `BASE_CERT`. Com ele, todo app novo no
+domínio já sai com HTTPS.
+
+Ao criar um app:
+
+- com um único domínio coringa, ele é usado direto (`api` →
+  `api.vinicgobbi.dev.br`);
+- com vários, a CLI (num terminal) e a TUI perguntam qual usar e qual
+  subdomínio. O padrão é o nome do app, com `_` trocado por `-`. Também dá
+  para adicionar outros domínios, como o `www.`;
+- em scripts, use `--base vinicgobbi.dev.br [--sub admin]`.
 
 ## Segurança do usuário compartilhado
 
@@ -195,7 +239,7 @@ qualquer chave sem `command=`.
 
 ```
 deploy-tools                                    # interface de tela cheia
-deploy-tools app create <app> --type laravel|react|static [-d dominio]... [--cert c --key k [--chain b]] [--migrate-on-deploy] [--enable]
+deploy-tools app create <app> --type laravel|react|static [-d dominio]... | [--base b [--sub s]] [--cert c --key k [--chain b]] [--migrate-on-deploy] [--enable]
 deploy-tools app migrate <app> --type ... [--vhost arquivo] [--yes]
 deploy-tools app config <app> [--type t] [--migrate-on-deploy | --no-migrate-on-deploy]
 deploy-tools app domain list|add|remove <app> [dominio]...
@@ -212,6 +256,7 @@ deploy-tools key secrets [--host h] [--repo dono/repo | --org org]
 deploy-tools server install
 deploy-tools server setup [--key arquivo.pub]
 deploy-tools server certs
+deploy-tools server domain list|add|remove [domínio]... [--cert c --key k [--chain b]]
 deploy-tools server status                      # instalado ou rodando solto?
 deploy-tools completion bash|zsh|fish
 ```
@@ -230,7 +275,7 @@ confirmação.
 ```bash
 sudo deploy-tools app create minha-api --type laravel -d api.example.com
 sudo deploy-tools app create meu-front --type react -d app.example.com,www.app.example.com --enable
-sudo deploy-tools app create docs --type static        # com DOMAIN_SUFFIX: docs.<sufixo>
+sudo deploy-tools app create docs --type static --base vinicgobbi.dev.br   # docs.vinicgobbi.dev.br
 ```
 
 O comando cria:
@@ -239,9 +284,9 @@ O comando cria:
   O setgid faz os arquivos herdarem o grupo `www-data`, então o Apache
   consegue ler.
 - O `.deploy.conf`.
-- O vhost em `sites-available/`: porta 443 com SSL (certificado escolhido
-  como em [Certificados TLS](#certificados-tls)), mais uma porta 80 que
-  redireciona para HTTPS.
+- O vhost em `sites-available/`. Com certificado (escolhido como em
+  [Certificados TLS](#certificados-tls)), porta 443 com SSL mais uma porta
+  80 que redireciona para HTTPS; sem certificado, só a porta 80.
 
 Sem `--enable`, o vhost não é ativado. Confira DNS e certificado e depois rode
 `sudo deploy-tools app enable <app>`. O `mod_rewrite` é ativado

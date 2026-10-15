@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/vinicgobbi/deploy-tools/internal/apache"
-	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/run"
 	"github.com/vinicgobbi/deploy-tools/internal/tlscert/tlstest"
 )
@@ -42,13 +41,22 @@ func TestCreateWithDomainsFindsCertificate(t *testing.T) {
 	}
 }
 
-func TestCreateFallsBackToSelfSigned(t *testing.T) {
+func TestCreateWithoutCertificateIsHTTPOnly(t *testing.T) {
 	p, _ := newP(t)
 	if err := p.Create(CreateOptions{App: "app", Type: "static"}); err != nil {
 		t.Fatal(err)
 	}
-	if f, _, _ := apache.CertFiles(read(t, p.Paths.VhostFile("app"))); f != config.FallbackCert {
-		t.Fatalf("cert = %q", f)
+	vhost := read(t, p.Paths.VhostFile("app"))
+	if f, _, _ := apache.CertFiles(vhost); f != "" || apache.HasTLS(vhost) || strings.Contains(vhost, ":443") {
+		t.Fatalf("expected HTTP only:\n%s", vhost)
+	}
+	// Adding a domain once a certificate covers everything turns HTTPS on.
+	tlstest.LetsEncrypt(t, p.Paths.CertDirs[0], "app", []string{"app.example.com", "www.app.example.com"}, future)
+	if err := p.AddDomains("app", []string{"www.app.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if vhost := read(t, p.Paths.VhostFile("app")); !apache.HasTLS(vhost) || !strings.Contains(vhost, "<VirtualHost *:443>") {
+		t.Fatalf("HTTPS not turned on:\n%s", vhost)
 	}
 }
 
@@ -134,13 +142,13 @@ func TestUpdateCert(t *testing.T) {
 	if err := p.Create(CreateOptions{App: "app", Type: "static", Domains: []string{"app.example.com", "www.app.example.com"}}); err != nil {
 		t.Fatal(err)
 	}
-	// Still nothing on disk: keeps the fallback, no error (nothing to lose).
-	if _, err := p.UpdateCert("app", CertChoice{}); err != nil {
-		t.Fatal(err)
+	// Still nothing on disk: stays HTTP only, no error (nothing to lose).
+	if c, err := p.UpdateCert("app", CertChoice{}); err != nil || !c.Fallback {
+		t.Fatal(c, err)
 	}
 	full := tlstest.LetsEncrypt(t, p.Paths.CertDirs[0], "app", []string{"app.example.com", "www.app.example.com"}, future)
 	c, err := p.UpdateCert("app", CertChoice{})
-	if err != nil || c.File != full {
+	if err != nil || c.File != full || !apache.HasTLS(read(t, p.Paths.VhostFile("app"))) {
 		t.Fatalf("UpdateCert = %+v, %v", c, err)
 	}
 	// With the real one gone, it refuses to downgrade to the fallback.
