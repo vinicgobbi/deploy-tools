@@ -1,3 +1,9 @@
+## v0.11.1 (2026-10-15)
+
+### Fix
+
+- **deploy-dev**: check sem o prefixo .:0: quando o projeto não tem workflow
+
 ## v0.11.0 (2026-10-15)
 
 ### Feat
