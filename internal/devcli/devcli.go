@@ -15,6 +15,7 @@ import (
 
 	"github.com/vinicgobbi/deploy-tools/internal/project"
 	"github.com/vinicgobbi/deploy-tools/internal/ui"
+	"github.com/vinicgobbi/deploy-tools/internal/update"
 )
 
 type Env struct {
@@ -22,6 +23,14 @@ type Env struct {
 	// Version and Commit of this build: the generated workflow pins the
 	// deploy action to Commit (the tag's commit in a release build).
 	Version, Commit string
+
+	// FromPATH: called by name, so it is the installed binary and the
+	// guided menu hides "Instalar no PATH" (updates are automatic).
+	FromPATH bool
+	// Self-update (see update.go). Off in tests unless set.
+	Updates     update.Client
+	AutoUpdate  bool
+	UpdateStamp string
 }
 
 func Execute(env *Env, args []string) int {
@@ -58,6 +67,13 @@ Sem argumentos, num terminal, abre um modo guiado.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+			switch cmd.Name() {
+			case "version", "update", "install", "help", "completion", "__complete", "__completeNoDesc":
+				return
+			}
+			autoUpdate(env)
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !env.UI.Interactive {
 				return cmd.Help()
@@ -65,7 +81,7 @@ Sem argumentos, num terminal, abre um modo guiado.`,
 			return guided(env, ".")
 		},
 	}
-	root.AddCommand(initCmd(env), checkCmd(env), installCmd(env), &cobra.Command{
+	root.AddCommand(initCmd(env), checkCmd(env), installCmd(env), updateCmd(env), &cobra.Command{
 		Use:   "version",
 		Short: "Mostra a versão (e a da action de deploy que o init fixa)",
 		Args:  cobra.NoArgs,

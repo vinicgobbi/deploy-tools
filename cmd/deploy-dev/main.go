@@ -18,5 +18,11 @@ var (
 )
 
 func main() {
-	os.Exit(devcli.Execute(&devcli.Env{UI: ui.New(), Version: version, Commit: commit}, os.Args[1:]))
+	env := &devcli.Env{
+		UI: ui.New(), Version: version, Commit: commit,
+		FromPATH:    devcli.InvokedFromPATH(os.Args[0]),
+		AutoUpdate:  os.Getenv("DEPLOY_DEV_NO_UPDATE") == "",
+		UpdateStamp: devcli.UpdateStamp(),
+	}
+	os.Exit(devcli.Execute(env, os.Args[1:]))
 }

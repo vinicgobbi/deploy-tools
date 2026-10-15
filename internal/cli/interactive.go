@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -57,10 +58,13 @@ func tuiApp(env *Env) tui.App {
 		return title + " " + strings.Join(names, ", ") + "."
 	}
 
-	return tui.App{
+	app := tui.App{
 		Title: "deploy-tools " + env.Version,
 		Subtitle: func() string {
 			host, _ := os.Hostname()
+			if env.UpdateNote != "" {
+				host += " · " + env.UpdateNote
+			}
 			if _, loose := installSummary(env); loose {
 				return host + " · binário solto (" + env.installState().Self + ")"
 			}
@@ -186,16 +190,6 @@ func tuiApp(env *Env) tui.App {
 					CLI: "deploy-tools key secrets [--host h] [--repo dono/repo | --org org]",
 				},
 				{
-					Label: "Instalar/atualizar", Root: true, Run: rooted(func() error { return iInstall(env) }),
-					Desc: func() string {
-						lines, _ := installSummary(env)
-						return "Instala este binário (" + env.Version + ") em " + env.Paths.BinDir + " e troca o " +
-							"deploy-ci de forma atômica. Não mexe em usuário, chaves nem apps: os próximos " +
-							"deploys da CI já usam a versão nova.\n\n" + strings.Join(lines, "\n")
-					},
-					CLI: "sudo deploy-tools server install",
-				},
-				{
 					Label: "Setup de servidor", Root: true, Run: rooted(func() error { return iSetup(env) }),
 					Desc: text("Prepara um servidor novo: cria (ou corrige) o usuário " + env.Paths.DeployUser +
 						", instala o binário e cuida da chave da CI: gera aqui na hora (gravada em ./ci_deploy_key), " +
@@ -221,6 +215,24 @@ func tuiApp(env *Env) tui.App {
 			}},
 		},
 	}
+	// Called by name, it is the installed binary (kept up to date by the
+	// automatic update): installing makes sense only for a loose copy.
+	if !env.FromPATH {
+		srv := &app.Sections[len(app.Sections)-1]
+		install := tui.Item{
+			Label: "Instalar/atualizar", Root: true, Run: rooted(func() error { return iInstall(env) }),
+			Desc: func() string {
+				lines, _ := installSummary(env)
+				return "Instala este binário (" + env.Version + ") em " + env.Paths.BinDir + " e troca o " +
+					"deploy-ci de forma atômica. Não mexe em usuário, chaves nem apps: os próximos " +
+					"deploys da CI já usam a versão nova. Depois, chame só deploy-tools: as atualizações " +
+					"passam a ser automáticas.\n\n" + strings.Join(lines, "\n")
+			},
+			CLI: "sudo deploy-tools server install",
+		}
+		srv.Items = slices.Insert(srv.Items, 3, install)
+	}
+	return app
 }
 
 // listApps is env.P.Apps, with a missing apps root meaning no apps.

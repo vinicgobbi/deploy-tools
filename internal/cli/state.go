@@ -12,6 +12,7 @@ import (
 
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
+	"github.com/vinicgobbi/deploy-tools/internal/update"
 )
 
 // installState is cached: InstallState runs the installed binary to read
@@ -26,42 +27,7 @@ func (env *Env) installState() provision.InstallState {
 
 // compareVersions compares "vX.Y.Z[-anything]"; ok=false when either is
 // not a version (e.g. "dev").
-func compareVersions(a, b string) (cmp int, ok bool) {
-	pa, oka := parseVersion(a)
-	pb, okb := parseVersion(b)
-	if !oka || !okb {
-		return 0, false
-	}
-	for i := range pa {
-		if pa[i] != pb[i] {
-			if pa[i] < pb[i] {
-				return -1, true
-			}
-			return 1, true
-		}
-	}
-	return 0, true
-}
-
-func parseVersion(v string) ([3]int, bool) {
-	var out [3]int
-	v = strings.TrimPrefix(v, "v")
-	if i := strings.IndexAny(v, "-+"); i >= 0 {
-		v = v[:i]
-	}
-	parts := strings.Split(v, ".")
-	if len(parts) != 3 {
-		return out, false
-	}
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			return out, false
-		}
-		out[i] = n
-	}
-	return out, true
-}
+func compareVersions(a, b string) (int, bool) { return update.Compare(a, b) }
 
 // installSummary describes whether this binary is the installed one or a
 // loose copy, with what to do about it. loose is true for a loose copy.

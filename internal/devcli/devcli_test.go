@@ -140,3 +140,20 @@ func TestGuidedMenu(t *testing.T) {
 		}
 	}
 }
+
+// runWith is run with a hook to adjust the Env first.
+func runWith(t *testing.T, input string, adjust func(*Env), args ...string) (string, error) {
+	t.Helper()
+	var out bytes.Buffer
+	env := &Env{
+		UI:      &ui.UI{In: strings.NewReader(input), Out: &out, Interactive: input != "", Accessible: true},
+		Version: "v1.2.0",
+	}
+	adjust(env)
+	root := NewRoot(env)
+	root.SetArgs(args)
+	root.SetOut(&out)
+	root.SetErr(&out)
+	err := root.Execute()
+	return out.String(), err
+}

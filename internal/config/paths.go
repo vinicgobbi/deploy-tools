@@ -64,6 +64,8 @@ type Paths struct {
 	BaseCerts   map[string]CertFiles // certificate registered for a base (BASE_CERT), by base
 	ConfigFile  string               // File; re-rooted by ForRoot so tests can write it
 
+	AutoUpdate bool // check GitHub for a newer release (AUTO_UPDATE=no turns it off)
+
 	KeepReleases int
 }
 
@@ -82,6 +84,7 @@ func Default() Paths {
 		WebGroup:     "www-data",
 		CertDirs:     append([]string(nil), tlscert.DefaultDirs...),
 		ConfigFile:   File,
+		AutoUpdate:   true,
 		KeepReleases: 3,
 	}
 }
@@ -131,6 +134,15 @@ func Load(path string) (Paths, error) {
 				p.BaseCerts = map[string]CertFiles{}
 			}
 			p.BaseCerts[NormalizeBase(f[0])] = c
+		case "AUTO_UPDATE":
+			switch val {
+			case "yes", "":
+				p.AutoUpdate = true
+			case "no":
+				p.AutoUpdate = false
+			default:
+				return p, fmt.Errorf("%s:%d: AUTO_UPDATE deve ser yes ou no", path, n)
+			}
 		case "DEPLOY_HOST":
 			p.DeployHost = val
 		case "SSL_CERT_FILE":

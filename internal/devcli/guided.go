@@ -22,7 +22,7 @@ func devApp(env *Env, dir string) tui.App {
 		_, err := os.Stat(workflowPath(dir))
 		return err == nil
 	}
-	return tui.App{
+	app := tui.App{
 		Title: "deploy-dev " + env.Version,
 		Subtitle: func() string {
 			abs, _ := filepath.Abs(dir)
@@ -71,22 +71,27 @@ func devApp(env *Env, dir string) tui.App {
 					CLI: "deploy-dev check",
 				},
 			}},
-			{Title: "Instalação", Items: []tui.Item{
-				{
-					Label: "Instalar no PATH",
-					Run:   func() error { return runInstall(env, "", false, false) },
-					Desc: func() string {
-						s := "Copia este deploy-dev para a pasta de programas do seu usuário (sem admin) e garante " +
-							"que ela está no PATH, para chamar o deploy-dev de qualquer pasta. Rodar de novo com " +
-							"uma versão mais nova atualiza."
-						if isInstalled() {
-							s += "\n\nEste binário já é o instalado."
-						}
-						return s
-					},
-					CLI: "deploy-dev install",
-				},
-			}},
 		},
 	}
+	// Called by name, it is the installed binary (kept up to date by the
+	// automatic update): installing makes sense only for a loose copy.
+	if !env.FromPATH {
+		app.Sections = append(app.Sections, tui.Section{Title: "Instalação", Items: []tui.Item{
+			{
+				Label: "Instalar no PATH",
+				Run:   func() error { return runInstall(env, "", false, false) },
+				Desc: func() string {
+					s := "Copia este deploy-dev para a pasta de programas do seu usuário (sem admin) e garante " +
+						"que ela está no PATH, para chamar o deploy-dev de qualquer pasta. Rodar de novo com " +
+						"uma versão mais nova atualiza."
+					if isInstalled() {
+						s += "\n\nEste binário já é o instalado."
+					}
+					return s
+				},
+				CLI: "deploy-dev install",
+			},
+		}})
+	}
+	return app
 }

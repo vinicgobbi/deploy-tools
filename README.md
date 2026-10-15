@@ -113,7 +113,30 @@ version` e o `deploy-tools server status` mostram isso, junto com a versão
 instalada e se o binário solto é mais novo ou mais antigo. A interface de
 tela cheia indica "binário solto" no cabeçalho.
 
-Para atualizar um servidor já configurado, só troque o binário:
+### Atualizações automáticas
+
+A partir da v0.10.0, os dois binários se atualizam sozinhos. No máximo uma
+vez por dia, ao rodar um comando, eles consultam a última release no GitHub
+(com timeout curto, sem travar o comando). Se houver versão nova, baixam o
+binário do seu sistema, **conferem o SHA-256** publicado na release e o
+instalam. A versão nova vale a partir da próxima execução.
+
+- **deploy-tools**: como root e com o binário instalado, instala sozinho
+  (como o `server install`: troca atômica do binário e do `deploy-ci`). Sem
+  root, só avisa. O forced command da CI nunca consulta nada.
+- **deploy-dev**: atualiza a cópia instalada no PATH do usuário.
+- Na mão: `sudo deploy-tools update` e `deploy-dev update` (`--check` só
+  verifica).
+- Para desligar: `AUTO_UPDATE=no` no `/etc/deploy-tools.conf`, ou as
+  variáveis `DEPLOY_TOOLS_NO_UPDATE=1` e `DEPLOY_DEV_NO_UPDATE=1`. Builds de
+  desenvolvimento (`dev`, `-dirty`) nunca se atualizam.
+
+Chamado pelo nome (`deploy-tools`, `sudo deploy-tools`, `deploy-dev`), o
+binário é o instalado: a TUI não mostra "Instalar/atualizar", e o modo
+guiado do `deploy-dev` não mostra "Instalar no PATH". Chamado por um caminho
+(`./deploy-tools-linux-amd64`), a opção continua lá.
+
+Para atualizar na mão um servidor já configurado, também dá para trocar o binário:
 
 ```bash
 sudo /tmp/deploy-tools-linux-amd64 server install
@@ -300,6 +323,7 @@ deploy-tools server setup [--host h] [--generate-key [--key-out arquivo] | --key
 deploy-tools server certs
 deploy-tools server domain list|add|remove [domínio]... [--cert c --key k [--chain b]]
 deploy-tools server status                      # instalado ou rodando solto?
+deploy-tools update [--check]                   # atualiza para a última release
 deploy-tools completion bash|zsh|fish
 ```
 

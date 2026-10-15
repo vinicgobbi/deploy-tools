@@ -15,6 +15,7 @@ import (
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
 	"github.com/vinicgobbi/deploy-tools/internal/ui"
+	"github.com/vinicgobbi/deploy-tools/internal/update"
 )
 
 type Env struct {
@@ -28,6 +29,15 @@ type Env struct {
 	// copy buttons, since the menu beside the text breaks mouse selection.
 	TUI       bool
 	clipboard io.Writer // OSC 52 destination; nil = /dev/tty (tests replace it)
+
+	// FromPATH: called by name, so it is the installed binary and the TUI
+	// hides "Instalar/atualizar" (updates are automatic).
+	FromPATH bool
+	// Self-update (see selfupdate.go). Off in tests unless set.
+	Updates     update.Client
+	AutoUpdate  bool
+	UpdateStamp string
+	UpdateNote  string // shown in the TUI header after an automatic update
 	// RequireRoot fails unless running as root; replaced in tests.
 	RequireRoot func() error
 }
@@ -42,6 +52,9 @@ func NewEnv(version string) *Env {
 	self, _ := os.Executable()
 	return &Env{
 		Paths: paths, P: provision.New(paths, u.Out), UI: u, Self: self, Version: version,
+		FromPATH:    invokedFromPATH(os.Args[0]),
+		AutoUpdate:  paths.AutoUpdate && os.Getenv("DEPLOY_TOOLS_NO_UPDATE") == "",
+		UpdateStamp: updateStamp(),
 		RequireRoot: func() error {
 			if os.Geteuid() != 0 {
 				return errors.New("precisa de root — rode com sudo")
@@ -62,6 +75,15 @@ Sem argumentos, num terminal, abre um menu interativo.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
+		// "version" is run by other copies (InstallState) and must stay
+		// quick and quiet; "update" checks on its own.
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+			switch cmd.Name() {
+			case "version", "update", "ci", "help", "completion", "__complete", "__completeNoDesc":
+				return
+			}
+			autoUpdate(env)
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !env.UI.Interactive {
 				return cmd.Help()
@@ -72,7 +94,7 @@ Sem argumentos, num terminal, abre um menu interativo.`,
 	root.AddGroup(
 		&cobra.Group{ID: "main", Title: "Comandos:"},
 	)
-	for _, c := range []*cobra.Command{appCmd(env), releaseCmd(env), keyCmd(env), serverCmd(env)} {
+	for _, c := range []*cobra.Command{appCmd(env), releaseCmd(env), keyCmd(env), serverCmd(env), updateCmd(env)} {
 		c.GroupID = "main"
 		root.AddCommand(c)
 	}
