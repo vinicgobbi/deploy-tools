@@ -1,3 +1,9 @@
+## v0.4.0 (2026-10-15)
+
+### Feat
+
+- **cli**: gera a chave da CI no servidor (key generate, server setup --generate-key)
+
 ## v0.3.0 (2026-10-15)
 
 ### Feat
