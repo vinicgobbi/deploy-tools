@@ -38,6 +38,28 @@ func NormalizeDomains(ds []string) []string {
 	return out
 }
 
+// WithWWW adds www.<domain> right after each domain that is not a www.
+// alias itself (and does not have one yet).
+func WithWWW(ds []string) []string {
+	var out []string
+	for _, d := range ds {
+		if !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+		if w := "www." + d; !strings.HasPrefix(d, "www.") && !slices.Contains(out, w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// withoutWWWAliases drops the www.<d> entries whose <d> is also in ds.
+func withoutWWWAliases(ds []string) []string {
+	return slices.DeleteFunc(slices.Clone(ds), func(d string) bool {
+		return strings.HasPrefix(d, "www.") && slices.Contains(ds, strings.TrimPrefix(d, "www."))
+	})
+}
+
 func validateDomains(ds []string) error {
 	if len(ds) == 0 {
 		return validate.Domain("")
@@ -87,19 +109,36 @@ func (p *Provisioner) ChooseCert(domains []string, override CertChoice) (CertCho
 			Source: "fixo em " + config.File,
 		}), nil
 	}
+	if c, ok := p.findCert(domains); ok {
+		return c, nil
+	}
+	// The automatic www. aliases are often not covered (a *.example.com
+	// wildcard does not cover www.api.example.com): rather than leaving the
+	// whole site on HTTP, take a certificate for the other domains and warn.
+	if core := withoutWWWAliases(domains); len(core) < len(domains) {
+		if c, ok := p.findCert(core); ok {
+			return inspect(c), nil
+		}
+	}
+	return CertChoice{Source: "nenhum", Fallback: true, Missing: domains}, nil
+}
+
+// findCert is a registered base certificate, or one found on disk, that
+// covers every domain.
+func (p *Provisioner) findCert(domains []string) (CertChoice, bool) {
 	for _, b := range p.Paths.BaseDomains {
 		bc, ok := p.Paths.BaseCerts[b]
 		if !ok {
 			continue
 		}
 		if info, err := tlscert.Inspect(bc.File); err == nil && p.now().Before(info.NotAfter) && info.Covers(domains) {
-			return CertChoice{File: bc.File, Key: bc.Key, Chain: bc.Chain, Source: "coringa cadastrado para " + b, NotAfter: info.NotAfter}, nil
+			return CertChoice{File: bc.File, Key: bc.Key, Chain: bc.Chain, Source: "coringa cadastrado para " + b, NotAfter: info.NotAfter}, true
 		}
 	}
 	if c, ok := tlscert.Find(p.Paths.CertDirs, domains, p.now()); ok {
-		return CertChoice{File: c.File, Key: c.Key, Chain: c.Chain, Source: "encontrado automaticamente", NotAfter: c.NotAfter}, nil
+		return CertChoice{File: c.File, Key: c.Key, Chain: c.Chain, Source: "encontrado automaticamente", NotAfter: c.NotAfter}, true
 	}
-	return CertChoice{Source: "nenhum", Fallback: true, Missing: domains}, nil
+	return CertChoice{}, false
 }
 
 func (p *Provisioner) sayCert(c CertChoice) {
@@ -131,8 +170,8 @@ func (p *Provisioner) Domains(app string) ([]string, error) {
 }
 
 // AddDomains adds domains to app's site (the first domain stays the
-// ServerName).
-func (p *Provisioner) AddDomains(app string, add []string) error {
+// ServerName), each with its www. alias when www is set.
+func (p *Provisioner) AddDomains(app string, add []string, www bool) error {
 	cur, err := p.Domains(app)
 	if err != nil {
 		return err
@@ -140,6 +179,9 @@ func (p *Provisioner) AddDomains(app string, add []string) error {
 	add = NormalizeDomains(add)
 	if err := validateDomains(add); err != nil {
 		return err
+	}
+	if www {
+		add = WithWWW(add)
 	}
 	next := NormalizeDomains(append(slices.Clone(cur), add...))
 	if len(next) == len(cur) {
@@ -149,8 +191,9 @@ func (p *Provisioner) AddDomains(app string, add []string) error {
 	return p.SetDomains(app, next)
 }
 
-// RemoveDomains removes domains from app's site. Removing the ServerName
-// promotes the next domain; the last domain cannot be removed.
+// RemoveDomains removes domains from app's site, with their www. alias.
+// Removing the ServerName promotes the next domain; the last domain cannot
+// be removed.
 func (p *Provisioner) RemoveDomains(app string, rm []string) error {
 	cur, err := p.Domains(app)
 	if err != nil {
@@ -160,6 +203,11 @@ func (p *Provisioner) RemoveDomains(app string, rm []string) error {
 	for _, d := range rm {
 		if !slices.Contains(cur, d) {
 			return fmt.Errorf("%s não é um domínio de %s (domínios: %s)", d, app, strings.Join(cur, ", "))
+		}
+	}
+	for _, d := range slices.Clone(rm) {
+		if w := "www." + d; !strings.HasPrefix(d, "www.") && slices.Contains(cur, w) && !slices.Contains(rm, w) {
+			rm = append(rm, w)
 		}
 	}
 	next := slices.DeleteFunc(slices.Clone(cur), func(d string) bool { return slices.Contains(rm, d) })

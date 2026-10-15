@@ -365,14 +365,15 @@ func TestDomainCommands(t *testing.T) {
 	if err := runCLI(env, "app", "domain", "list", "loja"); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "loja.example.org  (principal)\nwww.loja.example.org\nshop.example.org\n") {
+	if got := out.String(); !strings.Contains(got, "loja.example.org  (principal)\nwww.loja.example.org\nshop.example.org\nwww.shop.example.org\n") {
 		t.Fatalf("list:\n%s", got)
 	}
 	if err := runCLI(env, "app", "domain", "remove", "loja", "loja.example.org"); err != nil {
 		t.Fatal(err)
 	}
 	vhost, _ := os.ReadFile(env.Paths.VhostFile("loja"))
-	if !strings.Contains(string(vhost), "ServerName www.loja.example.org\n    ServerAlias shop.example.org\n") {
+	// loja.example.org goes with its www. alias.
+	if !strings.Contains(string(vhost), "ServerName shop.example.org\n    ServerAlias www.shop.example.org\n") {
 		t.Fatalf("vhost:\n%s", vhost)
 	}
 	out.Reset()
@@ -498,13 +499,13 @@ func TestBaseDomainCommandsAndCreate(t *testing.T) {
 	if err := runCLI(env, "app", "create", "api", "--type", "static", "--base", "vinicgobbi.dev.br", "--sub", "api-v2"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := env.P.Domains("api"); strings.Join(got, " ") != "api-v2.vinicgobbi.dev.br" {
+	if got, _ := env.P.Domains("api"); strings.Join(got, " ") != "api-v2.vinicgobbi.dev.br www.api-v2.vinicgobbi.dev.br" {
 		t.Fatalf("domains = %v", got)
 	}
 
 	// On a terminal it asks: 2 = vinicgobbi.dev.br, empty subdomain keeps
-	// the app name, one extra domain.
-	tty, ttyOut := testEnv(t, "2\n\nwww.loja.vinicgobbi.dev.br\n")
+	// the app name, one extra domain (each gets its www. alias).
+	tty, ttyOut := testEnv(t, "2\n\nshop.vinicgobbi.dev.br\n")
 	tty.Paths, tty.P.Paths = env.Paths, env.Paths
 	if err := runCLI(tty, "app", "create", "loja", "--type", "static"); err != nil {
 		t.Fatalf("%v\n%s", err, ttyOut)
@@ -512,7 +513,7 @@ func TestBaseDomainCommandsAndCreate(t *testing.T) {
 	if !strings.Contains(ttyOut.String(), "Qual domínio usar?") {
 		t.Fatalf("no question:\n%s", ttyOut)
 	}
-	if got, _ := tty.P.Domains("loja"); strings.Join(got, " ") != "loja.vinicgobbi.dev.br www.loja.vinicgobbi.dev.br" {
+	if got, _ := tty.P.Domains("loja"); strings.Join(got, " ") != "loja.vinicgobbi.dev.br www.loja.vinicgobbi.dev.br shop.vinicgobbi.dev.br www.shop.vinicgobbi.dev.br" {
 		t.Fatalf("domains = %v", got)
 	}
 

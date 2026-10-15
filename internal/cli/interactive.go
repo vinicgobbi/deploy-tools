@@ -474,7 +474,7 @@ func iDomains(env *Env) error {
 	if err != nil {
 		return err
 	}
-	return env.P.AddDomains(app, add)
+	return env.P.AddDomains(app, add, true)
 }
 
 func iCert(env *Env) error {

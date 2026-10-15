@@ -50,10 +50,17 @@ func TestCreateWithoutCertificateIsHTTPOnly(t *testing.T) {
 	if f, _, _ := apache.CertFiles(vhost); f != "" || apache.HasTLS(vhost) || strings.Contains(vhost, ":443") {
 		t.Fatalf("expected HTTP only:\n%s", vhost)
 	}
-	// Adding a domain once a certificate covers everything turns HTTPS on.
-	tlstest.LetsEncrypt(t, p.Paths.CertDirs[0], "app", []string{"app.example.com", "www.app.example.com"}, future)
-	if err := p.AddDomains("app", []string{"www.app.example.com"}); err != nil {
+	// Adding a domain once a certificate covers the site turns HTTPS on;
+	// the automatic www. aliases it does not cover only get a warning.
+	tlstest.LetsEncrypt(t, p.Paths.CertDirs[0], "app", []string{"app.example.com", "shop.example.com"}, future)
+	if err := p.AddDomains("app", []string{"shop.example.com"}, true); err != nil {
 		t.Fatal(err)
+	}
+	if got, _ := p.Domains("app"); strings.Join(got, " ") != "app.example.com www.app.example.com shop.example.com www.shop.example.com" {
+		t.Fatalf("domains = %v", got)
+	}
+	if out := p.Out.(interface{ String() string }).String(); !strings.Contains(out, "não cobre www.app.example.com, www.shop.example.com") {
+		t.Fatalf("no warning about the www aliases:\n%s", out)
 	}
 	if vhost := read(t, p.Paths.VhostFile("app")); !apache.HasTLS(vhost) || !strings.Contains(vhost, "<VirtualHost *:443>") {
 		t.Fatalf("HTTPS not turned on:\n%s", vhost)
@@ -84,11 +91,11 @@ func TestAddRemoveDomainsSwapsCertificate(t *testing.T) {
 	wide := tlstest.LetsEncrypt(t, live, "app.example.com-0001", []string{"app.example.com", "api.example.com"}, future.AddDate(0, 1, 0))
 	f.Calls = nil
 
-	if err := p.AddDomains("app", []string{"api.example.com"}); err != nil {
+	if err := p.AddDomains("app", []string{"api.example.com"}, true); err != nil {
 		t.Fatal(err)
 	}
 	vhost := read(t, p.Paths.VhostFile("app"))
-	if got, _ := p.Domains("app"); strings.Join(got, " ") != "app.example.com api.example.com" {
+	if got, _ := p.Domains("app"); strings.Join(got, " ") != "app.example.com www.app.example.com api.example.com www.api.example.com" {
 		t.Fatalf("domains = %v", got)
 	}
 	if file, _, _ := apache.CertFiles(vhost); file != wide {
@@ -101,7 +108,8 @@ func TestAddRemoveDomainsSwapsCertificate(t *testing.T) {
 	if err := p.RemoveDomains("app", []string{"app.example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := p.Domains("app"); strings.Join(got, " ") != "api.example.com" {
+	// The www. alias goes with its domain.
+	if got, _ := p.Domains("app"); strings.Join(got, " ") != "api.example.com www.api.example.com" {
 		t.Fatalf("domains = %v", got)
 	}
 	if err := p.RemoveDomains("app", []string{"api.example.com"}); err == nil {
@@ -128,7 +136,7 @@ func TestSetDomainsRestoresOnConfigtestFailure(t *testing.T) {
 		}
 		return nil
 	}
-	err := p.AddDomains("app", []string{"other.example.com"})
+	err := p.AddDomains("app", []string{"other.example.com"}, true)
 	if err == nil || !errors.Is(err, run.ErrFake) {
 		t.Fatalf("err = %v", err)
 	}
@@ -159,5 +167,22 @@ func TestUpdateCert(t *testing.T) {
 	// An explicit certificate wins and is checked for existence.
 	if _, err := p.UpdateCert("app", CertChoice{File: "/nope.crt", Key: "/nope.key"}); err == nil {
 		t.Fatal("expected missing file error")
+	}
+}
+
+func TestWithWWW(t *testing.T) {
+	got := WithWWW([]string{"a.com", "www.b.com", "c.com", "www.c.com", "a.com"})
+	if strings.Join(got, " ") != "a.com www.a.com www.b.com c.com www.c.com" {
+		t.Fatalf("WithWWW = %v", got)
+	}
+	if got := withoutWWWAliases([]string{"a.com", "www.a.com", "www.b.com"}); strings.Join(got, " ") != "a.com www.b.com" {
+		t.Fatalf("withoutWWWAliases = %v", got)
+	}
+	p, _ := newP(t)
+	if err := p.Create(CreateOptions{App: "x", Type: "static", Domains: []string{"x.example.com"}, NoWWW: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := p.Domains("x"); strings.Join(got, " ") != "x.example.com" {
+		t.Fatalf("NoWWW: %v", got)
 	}
 }
