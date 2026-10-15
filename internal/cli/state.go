@@ -176,17 +176,31 @@ func printSecrets(env *Env, s provision.Secrets, privateKey string, target secre
 
 	env.UI.Println()
 	env.UI.Println(env.UI.Faint("Ou pelo gh CLI, na máquina onde está a chave privada (nada passa pela tela):"))
-	f := target.flag()
-	env.UI.Println("    gh secret set DEPLOY_HOST " + f + " --body '" + s.Host + "'")
-	env.UI.Println("    gh secret set DEPLOY_USER " + f + " --body '" + s.User + "'")
-	env.UI.Println("    gh secret set DEPLOY_SSH_KEY " + f + " < " + privateKey)
-	if len(s.HostKeys) > 0 {
-		env.UI.Printf("    printf '%%s\\n' \\\n")
-		for _, l := range s.HostKeys {
-			env.UI.Println("      '" + l + "' \\")
-		}
-		env.UI.Println("      | gh secret set DEPLOY_HOST_KEY " + f)
+	for _, l := range strings.Split(ghCommands(s, privateKey, target), "\n") {
+		env.UI.Println("    " + l)
 	}
+}
+
+// ghCommands are the `gh secret set` commands for s, one per line (the
+// host keys one spans several).
+func ghCommands(s provision.Secrets, privateKey string, target secretsTarget) string {
+	if privateKey == "" {
+		privateKey = "ci_deploy_key"
+	}
+	f := target.flag()
+	lines := []string{
+		"gh secret set DEPLOY_HOST " + f + " --body '" + s.Host + "'",
+		"gh secret set DEPLOY_USER " + f + " --body '" + s.User + "'",
+		"gh secret set DEPLOY_SSH_KEY " + f + " < " + privateKey,
+	}
+	if len(s.HostKeys) > 0 {
+		lines = append(lines, "printf '%s\\n' \\")
+		for _, l := range s.HostKeys {
+			lines = append(lines, "  '"+l+"' \\")
+		}
+		lines = append(lines, "  | gh secret set DEPLOY_HOST_KEY "+f)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // privateKeyName guesses the private key's name from the .pub path.
@@ -201,6 +215,7 @@ func privateKeyName(pub string) string {
 func secretsCmd(env *Env) *cobra.Command {
 	var host string
 	var t secretsTarget
+	var copyGh, ghOnly bool
 	cmd := &cobra.Command{
 		Use:   "secrets",
 		Short: "Mostra como devem ficar os secrets do GitHub para este servidor",
@@ -214,10 +229,23 @@ Não compartilhe a saída: cole os valores só nos secrets do GitHub.`,
   deploy-tools key secrets --org acme`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			printSecrets(env, env.P.Secrets(host), "", t)
-			return nil
+			s := env.P.Secrets(host)
+			if ghOnly {
+				env.UI.Println(ghCommands(s, "", t))
+			} else {
+				printSecrets(env, s, "", t)
+			}
+			if copyGh {
+				if err := copyToClipboard(env, ghCommands(s, "", t)); err != nil {
+					return err
+				}
+				env.UI.OK("Comandos gh enviados para a área de transferência do seu terminal (OSC 52).")
+			}
+			return offerCopy(env, ghCommands(s, "", t))
 		},
 	}
+	cmd.Flags().BoolVar(&copyGh, "copy", false, "copia os comandos gh para a área de transferência do seu terminal (OSC 52, funciona por SSH)")
+	cmd.Flags().BoolVar(&ghOnly, "gh-only", false, "imprime só os comandos gh, sem formatação (para > arquivo.sh)")
 	cmd.Flags().StringVar(&host, "host", "", "endereço do servidor para a CI (padrão: DEPLOY_HOST de "+config.File+" ou o hostname)")
 	cmd.Flags().StringVar(&t.repo, "repo", "", "repositório dono/nome, para os comandos gh")
 	cmd.Flags().StringVar(&t.org, "org", "", "organização, para os comandos gh (secrets compartilhados)")
@@ -275,8 +303,13 @@ func doGenerateKey(env *Env, comment, out string) error {
 		env.UI.Hint("Na sua máquina, salve como ci_deploy_key (chmod 600) para usar com o gh, ou cole direto no GitHub.")
 	}
 	env.UI.Println()
-	printSecrets(env, env.P.Secrets(""), name, secretsTarget{})
-	return nil
+	s := env.P.Secrets("")
+	printSecrets(env, s, name, secretsTarget{})
+	var items []copyItem
+	if out == "" {
+		items = append(items, copyItem{"a chave privada (DEPLOY_SSH_KEY)", string(priv)})
+	}
+	return offerCopy(env, ghCommands(s, name, secretsTarget{}), items...)
 }
 
 func generateKeyCmd(env *Env) *cobra.Command {

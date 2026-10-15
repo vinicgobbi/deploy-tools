@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -594,5 +595,62 @@ func TestServerSetupGeneratesKey(t *testing.T) {
 	}
 	if keys, _ := env.P.Keys(); len(keys) != 1 {
 		t.Fatalf("keys = %+v", keys)
+	}
+}
+
+func TestSecretsCopyAndGhOnly(t *testing.T) {
+	env, out := testEnv(t, "")
+	env.Paths.DeployHost, env.P.Paths.DeployHost = "srv.example.com", "srv.example.com"
+	var clip bytes.Buffer
+	env.clipboard = &clip
+	if err := runCLI(env, "key", "secrets", "--gh-only", "--copy", "--repo", "acme/site"); err != nil {
+		t.Fatal(err)
+	}
+	want := "gh secret set DEPLOY_HOST -R acme/site --body 'srv.example.com'\n" +
+		"gh secret set DEPLOY_USER -R acme/site --body 'deploy'\n" +
+		"gh secret set DEPLOY_SSH_KEY -R acme/site < ci_deploy_key"
+	if !strings.HasPrefix(out.String(), want+"\n") || strings.Contains(out.String(), "Secrets do GitHub") {
+		t.Fatalf("--gh-only:\n%s", out)
+	}
+	if got := clip.String(); got != "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte(want))+"\x07" {
+		t.Fatalf("OSC 52 = %q", got)
+	}
+}
+
+func TestTUIOffersCopyAndSave(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "secrets.sh")
+	// 1 = copy the gh commands, 2 = save to file (path), 3 = done.
+	env, out := testEnv(t, "1\n2\n"+file+"\n3\n")
+	env.TUI = true
+	var clip bytes.Buffer
+	env.clipboard = &clip
+	if err := runCLI(env, "key", "secrets"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.HasPrefix(clip.String(), "\x1b]52;c;") {
+		t.Fatalf("nothing copied:\n%s", out)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil || !strings.Contains(string(b), "gh secret set DEPLOY_USER") || !strings.Contains(string(b), "Não compartilhe") {
+		t.Fatalf("file: %v\n%s", err, b)
+	}
+	if fi, _ := os.Stat(file); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v", fi.Mode().Perm())
+	}
+}
+
+func TestGeneratedKeyCanBeCopiedInTUI(t *testing.T) {
+	// 1 = copy the private key, 4 = done (2 = gh commands, 3 = save).
+	env, out := testEnv(t, "1\n4\n")
+	env.TUI = true
+	var clip bytes.Buffer
+	env.clipboard = &clip
+	if err := runCLI(env, "key", "generate"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	raw := strings.TrimSuffix(strings.TrimPrefix(clip.String(), "\x1b]52;c;"), "\x07")
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || !strings.HasPrefix(string(key), "-----BEGIN OPENSSH PRIVATE KEY-----") {
+		t.Fatalf("copied: %q %v", key, err)
 	}
 }

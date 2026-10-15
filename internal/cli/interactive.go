@@ -23,6 +23,8 @@ import (
 // (a line-based menu in accessible mode). Each item only collects options
 // and calls the same do* action the flag-driven commands use.
 func interactive(env *Env) error {
+	env.TUI = true
+	defer func() { env.TUI = false }()
 	return tui.Run(env.UI, tuiApp(env), &env.P.Out)
 }
 
@@ -171,8 +173,9 @@ func tuiApp(env *Env) tui.App {
 				},
 				{
 					Label: "Secrets do GitHub", Run: func() error {
-						printSecrets(env, env.P.Secrets(""), "", secretsTarget{})
-						return nil
+						s := env.P.Secrets("")
+						printSecrets(env, s, "", secretsTarget{})
+						return offerCopy(env, ghCommands(s, "", secretsTarget{}))
 					},
 					Desc: text("Mostra de novo como devem ficar os secrets dos repositórios no GitHub " +
 						"(DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_HOST_KEY), com os valores deste servidor " +
@@ -501,8 +504,9 @@ func iAddKey(env *Env) error {
 		return err
 	}
 	env.UI.Println()
-	printSecrets(env, env.P.Secrets(""), privateKeyName(path), secretsTarget{})
-	return nil
+	s := env.P.Secrets("")
+	printSecrets(env, s, privateKeyName(path), secretsTarget{})
+	return offerCopy(env, ghCommands(s, privateKeyName(path), secretsTarget{}))
 }
 
 func iInstall(env *Env) error {
@@ -529,7 +533,9 @@ func iSetup(env *Env) error {
 		return doGenerateKey(env, "", "")
 	case "file":
 		env.UI.Println()
-		printSecrets(env, env.P.Secrets(""), privateKeyName(path), secretsTarget{})
+		s := env.P.Secrets("")
+		printSecrets(env, s, privateKeyName(path), secretsTarget{})
+		return offerCopy(env, ghCommands(s, privateKeyName(path), secretsTarget{}))
 	}
 	return nil
 }

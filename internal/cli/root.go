@@ -7,6 +7,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -23,6 +24,10 @@ type Env struct {
 	Self    string // path of the running binary (for server install)
 	Version string
 	install *provision.InstallState // cached by installState()
+	// TUI is set while the full-screen interface runs: actions there offer
+	// copy buttons, since the menu beside the text breaks mouse selection.
+	TUI       bool
+	clipboard io.Writer // OSC 52 destination; nil = /dev/tty (tests replace it)
 	// RequireRoot fails unless running as root; replaced in tests.
 	RequireRoot func() error
 }

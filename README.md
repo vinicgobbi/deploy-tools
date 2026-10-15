@@ -440,7 +440,17 @@ Para ver esses valores a qualquer hora, rode no servidor:
 deploy-tools key secrets                         # ou o item "Secrets do GitHub" na interface
 deploy-tools key secrets --repo acme/site        # já com os comandos gh secret set do repositório
 deploy-tools key secrets --org acme              # secrets da organização, para vários repositórios
+deploy-tools key secrets --copy                  # copia os comandos gh para a área de transferência
+deploy-tools key secrets --gh-only > secrets.sh  # só os comandos, sem formatação
 ```
+
+Na TUI, a seleção com o mouse pega pedaços do menu ao lado. Por isso, depois
+dos secrets (e da chave privada, quando ela é gerada no servidor), aparece a
+opção de **copiar**. A cópia usa OSC 52, uma sequência que pede ao *seu*
+terminal para guardar o texto, e funciona por SSH. Se o seu terminal não
+aceitar (por exemplo, tmux sem `set-clipboard on`), use **Salvar num
+arquivo**: os comandos vão para um arquivo legível só pelo dono, para você
+ler com `cat` depois de sair.
 
 O comando lê `DEPLOY_HOST_KEY` das host keys do próprio servidor
 (`/etc/ssh/ssh_host_*_key.pub`), mostra as chaves da CI autorizadas (para
