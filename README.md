@@ -135,6 +135,11 @@ instalam. A versão nova vale a partir da próxima execução.
 - **deploy-dev**: atualiza a cópia instalada no PATH do usuário.
 - Na mão: `sudo deploy-tools update` e `deploy-dev update` (`--check` só
   verifica), ou o item **Verificar atualizações** nos menus dos dois.
+- **O que muda:** antes de atualizar (e no `--check`), os dois mostram o
+  changelog de cada versão entre a instalada e a nova, tirado do
+  `CHANGELOG.md` da release (novidades, correções e mudanças
+  incompatíveis em destaque). Depois de uma atualização automática, aparece
+  um resumo de até 8 itens, com o link das releases para o resto.
 - Para desligar: `AUTO_UPDATE=no` no `/etc/deploy-tools.conf`, ou as
   variáveis `DEPLOY_TOOLS_NO_UPDATE=1` e `DEPLOY_DEV_NO_UPDATE=1`. Builds de
   desenvolvimento (`dev`, `-dirty`) nunca se atualizam.
