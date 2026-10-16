@@ -1,3 +1,9 @@
+## v0.12.0 (2026-10-16)
+
+### Feat
+
+- **tui**: menu do deploy-tools separado por escopo e Listar apps colorido
+
 ## v0.11.1 (2026-10-15)
 
 ### Fix
