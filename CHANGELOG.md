@@ -1,3 +1,14 @@
+## v0.14.0 (2026-10-16)
+
+### Feat
+
+- **update**: mostra o changelog de cada versão ao atualizar
+- **dev**: gerencia as instâncias pela interface guiada
+
+### Refactor
+
+- **dev**: extrai o cadastro e a remoção de instâncias para reuso
+
 ## v0.13.0 (2026-10-16)
 
 ### Feat
