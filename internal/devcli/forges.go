@@ -221,32 +221,7 @@ manter o mesmo dono/repo e os commits originais.`,
 					return err
 				}
 			}
-			f.URL = strings.TrimSuffix(f.URL, "/")
-			if err := f.Validate(); err != nil {
-				return err
-			}
-			reg, err := env.registered()
-			if err != nil {
-				return err
-			}
-			if f.Name == project.GitHubCom.Name {
-				return errors.New(`"github" é a instância embutida (github.com): escolha outro nome`)
-			}
-			if _, ok := findForge(reg, f.Name); ok && !force {
-				return fmt.Errorf("a instância %q já existe — use --force para substituir", f.Name)
-			}
-			out := []project.Forge{}
-			for _, x := range reg {
-				if x.Name != f.Name {
-					out = append(out, x)
-				}
-			}
-			if err := env.saveForges(append(out, f)); err != nil {
-				return err
-			}
-			env.UI.OK("Instância %s cadastrada.", f.Label())
-			env.UI.Hint("O init a escolhe sozinho quando o remote origin aponta para %s; ou use `deploy-dev init --forge %s`.", f.Host(), f.Name)
-			return nil
+			return addForge(env, f, force)
 		},
 	}
 	fl := cmd.Flags()
@@ -256,6 +231,64 @@ manter o mesmo dono/repo e os commits originais.`,
 	fl.StringVar(&f.Runner, "runner", "", "label do runs-on (padrão: ubuntu-latest)")
 	fl.BoolVar(&force, "force", false, "substitui uma instância com o mesmo nome")
 	return cmd
+}
+
+// addForge registers f, replacing one with the same name only with force.
+func addForge(env *Env, f project.Forge, force bool) error {
+	f.URL = strings.TrimSuffix(f.URL, "/")
+	f.ActionsURL = strings.TrimSuffix(f.ActionsURL, "/")
+	if err := f.Validate(); err != nil {
+		return err
+	}
+	reg, err := env.registered()
+	if err != nil {
+		return err
+	}
+	if f.Name == project.GitHubCom.Name {
+		return errors.New(`"github" é a instância embutida (github.com): escolha outro nome`)
+	}
+	_, exists := findForge(reg, f.Name)
+	if exists && !force {
+		return fmt.Errorf("a instância %q já existe — use --force para substituir", f.Name)
+	}
+	out := []project.Forge{}
+	for _, x := range reg {
+		if x.Name == f.Name {
+			x = f // keeps its position when replaced
+		}
+		out = append(out, x)
+	}
+	if !exists {
+		out = append(out, f)
+	}
+	if err := env.saveForges(out); err != nil {
+		return err
+	}
+	env.UI.OK("Instância %s cadastrada.", f.Label())
+	env.UI.Hint("O init a escolhe sozinho quando o remote origin aponta para %s; ou use `deploy-dev init --forge %s`.", f.Host(), f.Name)
+	return nil
+}
+
+// removeForge drops the registered instance name.
+func removeForge(env *Env, name string) error {
+	reg, err := env.registered()
+	if err != nil {
+		return err
+	}
+	var out []project.Forge
+	for _, x := range reg {
+		if x.Name != name {
+			out = append(out, x)
+		}
+	}
+	if len(out) == len(reg) {
+		return fmt.Errorf("instância %q não cadastrada", name)
+	}
+	if err := env.saveForges(out); err != nil {
+		return err
+	}
+	env.UI.OK("Instância %s removida.", name)
+	return nil
 }
 
 func askForge(env *Env, f *project.Forge) error {
@@ -281,25 +314,6 @@ func forgeRemoveCmd(env *Env) *cobra.Command {
 		Aliases: []string{"rm"},
 		Short:   "Remove uma instância cadastrada",
 		Args:    cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			reg, err := env.registered()
-			if err != nil {
-				return err
-			}
-			var out []project.Forge
-			for _, x := range reg {
-				if x.Name != args[0] {
-					out = append(out, x)
-				}
-			}
-			if len(out) == len(reg) {
-				return fmt.Errorf("instância %q não cadastrada", args[0])
-			}
-			if err := env.saveForges(out); err != nil {
-				return err
-			}
-			env.UI.OK("Instância %s removida.", args[0])
-			return nil
-		},
+		RunE:    func(_ *cobra.Command, args []string) error { return removeForge(env, args[0]) },
 	}
 }
