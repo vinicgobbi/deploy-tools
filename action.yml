@@ -39,6 +39,14 @@ inputs:
   host-key:
     description: Linha(s) do known_hosts do servidor (secret DEPLOY_HOST_KEY).
     required: true
+  attempts:
+    description: Tentativas quando a conexão SSH falha (espera 10s, 20s, 40s... até 120s entre elas).
+    required: false
+    default: "6"
+  connect-timeout:
+    description: Segundos para desistir de uma tentativa de conexão.
+    required: false
+    default: "20"
 
 outputs:
   release-id:
@@ -58,28 +66,7 @@ runs:
         DEPLOY_USER: ${{ inputs.user }}
         DEPLOY_SSH_KEY: ${{ inputs.ssh-key }}
         DEPLOY_HOST_KEY: ${{ inputs.host-key }}
-      run: |
-        set -euo pipefail
-        [ -f "$ARCHIVE" ] || { echo "::error::arquivo não encontrado: $ARCHIVE"; exit 1; }
-
-        # O id começa com timestamp: o deploy-ci ordena e poda pelo nome.
-        suffix="${SUFFIX:-${GITHUB_SHA::7}}"
-        RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-$suffix"
-        [[ "$RELEASE_ID" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "::error::release id inválido: $RELEASE_ID"; exit 1; }
-
-        # Chave e known_hosts num diretório temporário, apagado no fim.
-        dir="$(mktemp -d)"
-        trap 'rm -rf "$dir"' EXIT
-        printf '%s\n' "$DEPLOY_SSH_KEY" > "$dir/key"
-        chmod 600 "$dir/key"
-        printf '%s\n' "$DEPLOY_HOST_KEY" > "$dir/known_hosts"
-
-        ssh -i "$dir/key" \
-            -o IdentitiesOnly=yes \
-            -o UserKnownHostsFile="$dir/known_hosts" \
-            -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "deploy $APP $RELEASE_ID" < "$ARCHIVE"
-
-        echo "release-id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
-        echo "Publicado $APP -> $RELEASE_ID"
+        ATTEMPTS: ${{ inputs.attempts }}
+        CONNECT_TIMEOUT: ${{ inputs.connect-timeout }}
+      # O script fica em action/deploy.sh (testado com um ssh falso).
+      run: bash "$GITHUB_ACTION_PATH/action/deploy.sh"

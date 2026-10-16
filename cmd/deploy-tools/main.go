@@ -10,7 +10,9 @@ package main
 
 import (
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/vinicgobbi/deploy-tools/internal/ci"
 	"github.com/vinicgobbi/deploy-tools/internal/cli"
@@ -23,6 +25,11 @@ var version = "dev"
 
 func main() {
 	if filepath.Base(os.Args[0]) == "deploy-ci" || (len(os.Args) == 2 && os.Args[1] == "ci") {
+		// When the CI connection drops, sshd hangs up the forced command. A
+		// deploy that already has its tarball must still finish (or clean up)
+		// on its own instead of dying halfway; the action then sees it in
+		// "list". A truncated upload still fails in tar and is removed.
+		signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
 		m := &release.Manager{Paths: config.Default(), Runner: run.Exec{}, Out: os.Stdout, Err: os.Stderr}
 		os.Exit(ci.Main(m, os.Getenv("SSH_ORIGINAL_COMMAND"), os.Stdin))
 	}

@@ -667,6 +667,28 @@ Fixe sempre pelo SHA do commit da tag, com a versão comentada ao lado. A
 action evolui junto com o `deploy-ci`: se o protocolo da CI mudar, as duas
 coisas mudam na mesma versão.
 
+### Quando a conexão falha ou há outro deploy em andamento
+
+- **Falha de conexão SSH** (servidor sem resposta, conexão que cai): a
+  action tenta de novo, até `attempts` vezes (padrão 6), esperando 10 s,
+  20 s, 40 s… até 120 s entre as tentativas. Cada tentativa desiste em
+  `connect-timeout` segundos (padrão 20). Antes de cada nova tentativa, ela
+  pergunta ao servidor se a versão enviada já está no ar (a conexão pode ter
+  caído depois de o deploy terminar); se estiver, conta como sucesso e não
+  publica de novo.
+- **Recusa do servidor** (app que não existe, hook do Laravel/Symfony que
+  falhou...): não é repetida, porque tentar de novo não resolveria. O erro
+  aparece no log.
+- **Outro deploy do mesmo app em andamento**: o `deploy-ci` espera ele
+  terminar (até 15 min) e avisa no log ("another deploy of <app> is in
+  progress; waiting..."). Deploys de apps diferentes rodam em paralelo, sem
+  esperar um pelo outro.
+- **Conexão que cai durante o deploy**: o `deploy-ci` não é interrompido.
+  Se o pacote chegou inteiro, o deploy termina sozinho; se chegou pela
+  metade, a release incompleta é descartada e o site não muda.
+
+O script da action fica em [`action/deploy.sh`](action/deploy.sh).
+
 ## Rollback
 
 Não precisa de um novo build: o rollback só reaponta o symlink para uma

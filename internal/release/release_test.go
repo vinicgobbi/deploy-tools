@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/vinicgobbi/deploy-tools/internal/appconf"
 	"github.com/vinicgobbi/deploy-tools/internal/config"
@@ -190,5 +193,60 @@ func TestSymfonySharesOnlyVarLog(t *testing.T) {
 	}
 	if fi, err := os.Lstat(filepath.Join(rel, "var")); err != nil || fi.Mode()&os.ModeSymlink != 0 {
 		t.Fatal("var/ must be a real directory of the release (cache stays per release)")
+	}
+}
+
+func TestDeployWaitsForAnotherDeployOfTheSameApp(t *testing.T) {
+	m, _ := setup(t, nil)
+	var errOut bytes.Buffer
+	m.Err = &errOut
+	lockPoll = 10 * time.Millisecond
+	t.Cleanup(func() { lockPoll = time.Second })
+
+	// Another deploy holds the lock for a moment.
+	f, err := os.OpenFile(filepath.Join(m.Paths.AppDir("api"), ".deploy.lock"), os.O_CREATE|os.O_RDONLY, 0o664)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}()
+
+	start := time.Now()
+	if err := m.Deploy("api", "1", bytes.NewReader(site(t))); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 100*time.Millisecond {
+		t.Fatal("did not wait for the other deploy")
+	}
+	if got := errOut.String(); !strings.Contains(got, "another deploy of api is in progress; waiting") ||
+		!strings.Contains(got, "finished; going on") {
+		t.Fatalf("stderr:\n%s", got)
+	}
+	if m.CurrentID("api") != "1" {
+		t.Fatal("deploy did not happen after waiting")
+	}
+}
+
+func TestDeployGivesUpAfterLockTimeout(t *testing.T) {
+	m, _ := setup(t, nil)
+	m.LockTimeout = 50 * time.Millisecond
+	lockPoll = 10 * time.Millisecond
+	t.Cleanup(func() { lockPoll = time.Second })
+	f, _ := os.OpenFile(filepath.Join(m.Paths.AppDir("api"), ".deploy.lock"), os.O_CREATE|os.O_RDONLY, 0o664)
+	defer f.Close()
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+
+	err := m.Deploy("api", "1", bytes.NewReader(site(t)))
+	if err == nil || !strings.Contains(err.Error(), "timed out after 50ms waiting for another deploy of api") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(m.Paths.ReleasesDir("api"), "1")); !os.IsNotExist(err) {
+		t.Fatal("nothing must be extracted while waiting")
 	}
 }

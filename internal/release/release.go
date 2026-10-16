@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/vinicgobbi/deploy-tools/internal/appconf"
 	"github.com/vinicgobbi/deploy-tools/internal/config"
@@ -38,6 +39,9 @@ type Manager struct {
 	Runner run.Runner
 	Out    io.Writer // progress/result messages (stdout in CI mode)
 	Err    io.Writer // output of hooks/tar (stderr in CI mode)
+	// LockTimeout bounds the wait for another deploy of the same app;
+	// zero means DefaultLockTimeout.
+	LockTimeout time.Duration
 }
 
 type Release struct {
@@ -364,6 +368,44 @@ func LinkShared(appDir, releaseDir, typ string) error {
 	return nil
 }
 
+// DefaultLockTimeout is how long a deploy waits for another one of the
+// same app before giving up.
+const DefaultLockTimeout = 15 * time.Minute
+
+// waitLock takes the app lock. When another deploy/rollback of the same
+// app holds it, it says so on stderr (shown in the CI log) and waits, up
+// to LockTimeout, instead of failing. Different apps never wait on each
+// other.
+func (m *Manager) waitLock(f *os.File, app string) error {
+	err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, syscall.EWOULDBLOCK) {
+		return fmt.Errorf("lock: %w", err)
+	}
+	timeout := m.LockTimeout
+	if timeout <= 0 {
+		timeout = DefaultLockTimeout
+	}
+	fmt.Fprintf(m.Err, "another deploy of %s is in progress; waiting for it to finish (up to %s)...\n", app, timeout)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(lockPoll)
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			fmt.Fprintf(m.Err, "the other deploy of %s finished; going on\n", app)
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return fmt.Errorf("lock: %w", err)
+		}
+	}
+	return fmt.Errorf("timed out after %s waiting for another deploy of %s", timeout, app)
+}
+
+var lockPoll = time.Second
+
 // lock serializes deploys/rollbacks of the same app (two pushes in a row
 // would otherwise race on current and on pruning). Blocks until free.
 func (m *Manager) lock(app string) (func(), error) {
@@ -373,9 +415,9 @@ func (m *Manager) lock(app string) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := m.waitLock(f, app); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("lock: %w", err)
+		return nil, err
 	}
 	return func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
