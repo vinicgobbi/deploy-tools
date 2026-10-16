@@ -577,7 +577,11 @@ Dentro do repositório do projeto:
 deploy-dev               # interface de tela cheia: gerar o workflow, checar, instalar no PATH
 deploy-dev init          # mostra o que detectou, deixa ajustar e grava .github/workflows/deploy.yml
 deploy-dev check         # valida os workflows (sai com código 1 se houver erro)
+deploy-dev forge         # instâncias de Gitea/Forgejo (ou GitHub) com domínio próprio
 ```
+
+O workflow é gerado para o **GitHub**, o **Gitea** ou o **Forgejo** (veja
+[Gitea e Forgejo](#gitea-e-forgejo)).
 
 O `init` detecta:
 
@@ -635,13 +639,65 @@ O `check` aponta:
 - actions sem SHA, ou com SHA mas sem a versão comentada;
 - `RELEASE_ID` sem timestamp na frente (o servidor poda pelo nome);
 - passo de SSH copiado, que pode virar a action;
-- restos de Gitea: contexto `gitea.*`, URL em `uses:` e checkout local da
-  action de deploy;
+- restos de Gitea num workflow do GitHub: contexto `gitea.*`, URL em `uses:`
+  e checkout local da action de deploy;
 - bump sem a proteção contra loop;
 - action de deploy numa versão mais antiga que a do `deploy-dev`.
 
 Use `--strict` para que os avisos também falhem, por exemplo num workflow de
 validação de PR.
+
+### Gitea e Forgejo
+
+Cadastre a instância uma vez, na sua máquina:
+
+```bash
+deploy-dev forge add empresa --kind gitea --url https://git.empresa.com
+deploy-dev forge add lab --kind forgejo --url https://code.lab.dev --runner docker
+deploy-dev forge list
+```
+
+O `init` escolhe a instância pelo host do remote `origin` (`git@git.empresa.com:...`
+ou `https://git.empresa.com/...`). Sem remote, gera para o github.com. Para
+escolher outra, use `--forge <nome>`. Um remote de um host não cadastrado é
+recusado, para o workflow não ir parar numa pasta que nada executa. O cadastro
+fica em `~/.config/deploy-dev/forges.yml` (no macOS, em
+`~/Library/Application Support`; no Windows, em `%AppData%`).
+
+| | GitHub | Gitea / Forgejo |
+|---|---|---|
+| Arquivo | `.github/workflows/deploy.yml` | `.gitea/workflows/` ou `.forgejo/workflows/` |
+| Jobs | validate → release → build → deploy | validate → release → deploy (build e publicação juntos) |
+| Pacote entre jobs | artefato, apagado depois do deploy | não há: as actions oficiais de artefato (v4+) não funcionam fora do GitHub, e o runner pode nem alcançar o serviço de artefatos |
+| Bump | action do Commitizen | `pip install commitizen` + `cz bump` |
+| Release | `gh release create` | API do Gitea/Forgejo (`/api/v1/repos/.../releases`) |
+| `uses:` | `dono/repo@sha` | igual, ou `<actions-url>/dono/repo@sha` com um mirror |
+
+Pontos de atenção:
+
+- **Actions:** sem `--actions-url`, o Gitea busca as actions no github.com
+  (o padrão do `DEFAULT_ACTIONS_URL`). O Forgejo busca no data.forgejo.org,
+  que não tem todas as actions usadas, então o workflow aponta para
+  `https://github.com/...`. Se a instância não alcança o github.com, cadastre
+  um mirror com `--actions-url` (com o mesmo `dono/repo` e os commits
+  originais, para o SHA continuar valendo).
+- **Runner:** `--runner` define o `runs-on` (padrão `ubuntu-latest`).
+- **Commitizen:** roda com `pip install commitizen` direto no runner, sem a
+  action do Commitizen (ela é do tipo Docker, que nem todo runner executa). O
+  push do `bump:` e da tag usa o token do Actions. Com a branch protegida,
+  crie o secret `CI_BOT_TOKEN` com o token de um usuário bot. A release é
+  criada pela API, e um job re-executado não cria uma release duplicada.
+- **`concurrency`:** o run disparado pelo push do `bump:` fica num grupo à
+  parte. No mesmo grupo, o Gitea cancelaria o deploy ainda pendente do run
+  que fez o bump. Versões que ignoram `concurrency` contam com o `deploy-ci`
+  do servidor, que já espera o deploy em andamento.
+- **Secrets e variáveis:** os mesmos quatro secrets (`DEPLOY_*`), em
+  Configurações → Actions → Segredos. Com o GitHub Packages no `.npmrc`, crie
+  também o `GH_PACKAGES_TOKEN`, um token do GitHub com `read:packages`.
+
+O `check` valida as três pastas. Nos workflows do Gitea e do Forgejo, URL em
+`uses:` e o contexto `gitea.*` são permitidos, mas a regra de fixar por SHA
+continua valendo.
 
 ## Action de deploy para os projetos
 
