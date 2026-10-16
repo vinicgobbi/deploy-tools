@@ -29,10 +29,13 @@ type Release struct {
 	Assets  map[string]string // file name -> download URL
 }
 
-// Client talks to GitHub; both fields have working defaults.
+// Client talks to GitHub; the fields have working defaults.
 type Client struct {
 	HTTP *http.Client
 	URL  string // LatestURL when empty
+	// ChangelogURL is a format with the tag (%s); ChangelogURL when both
+	// it and URL are empty (see Changes).
+	ChangelogURL string
 }
 
 func (c Client) http() *http.Client {

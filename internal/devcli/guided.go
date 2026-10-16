@@ -129,7 +129,8 @@ func devApp(env *Env, dir string) tui.App {
 			if !env.AutoUpdate {
 				auto = "desligada"
 			}
-			return "Consulta a última release no GitHub e, se houver versão nova, oferece instalar sobre a " +
+			return "Consulta a última release no GitHub e, se houver versão nova, mostra o que muda (o changelog de cada " +
+				"versão) e oferece instalar sobre a " +
 				"cópia do seu PATH. O download é conferido pelo SHA-256 publicado na release.\n\n" +
 				"Esta versão: " + env.Version + ".\nAtualização automática: " + auto + "."
 		},

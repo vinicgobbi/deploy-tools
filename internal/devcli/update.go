@@ -91,6 +91,18 @@ func autoUpdate(env *Env) {
 		return
 	}
 	env.UI.OK("deploy-dev atualizado: %s → %s (vale a partir da próxima execução).", env.Version, r.Version)
+	showChanges(env, env.Version, r.Version, autoNotesLines)
+}
+
+// autoNotesLines caps the notes after an automatic update: they show up
+// before the command the user actually ran.
+const autoNotesLines = 8
+
+// showChanges prints the changelog from current to latest; it never fails.
+func showChanges(env *Env, current, latest string, maxLines int) {
+	ctx, cancel := context.WithTimeout(context.Background(), autoCheckTimeout)
+	defer cancel()
+	env.Updates.ShowChanges(ctx, env.UI, current, latest, maxLines)
 }
 
 func updateCmd(env *Env) *cobra.Command {
@@ -98,7 +110,8 @@ func updateCmd(env *Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Verifica e instala a versão mais nova",
-		Long: `Baixa a última release do seu sistema, confere o SHA-256 publicado com
+		Long: `Mostra o que mudou desde a sua versão (o changelog de cada release),
+baixa a última release do seu sistema, confere o SHA-256 publicado com
 ela e substitui o deploy-dev instalado no PATH do usuário.
 
 A verificação também é automática, no máximo uma vez por dia. Para
@@ -116,6 +129,7 @@ desligar: DEPLOY_DEV_NO_UPDATE=1.`,
 				env.UI.OK("Já está na versão mais recente (%s; última release: %s).", env.Version, r.Version)
 				return nil
 			}
+			showChanges(env, env.Version, r.Version, 0)
 			if check {
 				env.UI.Println("Nova versão: " + r.Version + " (esta é " + env.Version + "). Atualize com: deploy-dev update")
 				return nil
@@ -145,6 +159,7 @@ func iCheckUpdate(env *Env) error {
 		env.UI.OK("Está na versão mais recente.")
 		return nil
 	}
+	showChanges(env, env.Version, r.Version, 0)
 	if _, dst := installedPath(); dst == "" {
 		env.UI.Hint("O deploy-dev não está instalado no PATH: baixe a release nova e rode install (ou use \"Instalar no PATH\").")
 		return nil

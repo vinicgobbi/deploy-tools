@@ -232,7 +232,8 @@ func tuiApp(env *Env) tui.App {
 	app.Sections = append(app.Sections, tui.Section{Title: "Esta ferramenta", Items: []tui.Item{{
 		Label: "Verificar atualizações", Run: func() error { return iCheckUpdate(env) },
 		Desc: func() string {
-			return "Consulta a última release no GitHub e, se houver versão nova, oferece instalar " +
+			return "Consulta a última release no GitHub e, se houver versão nova, mostra o que muda (o changelog de cada " +
+				"versão) e oferece instalar " +
 				"(com sudo). O download é conferido pelo SHA-256 publicado na release.\n\n" +
 				"Esta versão: " + env.Version + ".\n" + autoUpdateState(env)
 		},

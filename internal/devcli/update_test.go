@@ -73,3 +73,32 @@ func TestGuidedHidesInstallFromPATH(t *testing.T) {
 		t.Fatalf("from PATH: %s", got)
 	}
 }
+
+func TestUpdateCheckShowsChangelog(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest":
+			fmt.Fprint(w, `{"tag_name":"v0.10.0","assets":[]}`)
+		case "/v0.10.0/CHANGELOG.md":
+			fmt.Fprint(w, "## v0.10.0 (2026-10-16)\n\n### Feat\n\n- **dev**: novidade boa\n\n## v0.9.1 (2026-10-15)\n\n### Fix\n\n- conserto\n\n## v0.9.0 (2026-10-14)\n\n### Feat\n\n- antiga\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	out, err := runWith(t, "", func(e *Env) {
+		e.Version = "v0.9.0"
+		e.Updates.URL, e.Updates.ChangelogURL = srv.URL+"/latest", srv.URL+"/%s/CHANGELOG.md"
+	}, "update", "--check")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, want := range []string{"O que muda de v0.9.0 para v0.10.0", "dev: novidade boa", "conserto", "Nova versão: v0.10.0"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("faltou %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "antiga") {
+		t.Errorf("mostrou a versão instalada:\n%s", out)
+	}
+}

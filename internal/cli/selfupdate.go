@@ -80,6 +80,18 @@ func autoUpdate(env *Env) {
 	env.UpdateNote = "atualizado para " + r.Version + " (vale na próxima execução)"
 	env.UI.OK("deploy-tools atualizado: %s → %s. A próxima execução e os próximos deploys da CI já usam a versão nova.",
 		env.Version, r.Version)
+	showChanges(env, env.Version, r.Version, autoNotesLines)
+}
+
+// autoNotesLines caps the notes after an automatic update: they show up
+// before the command the operator actually ran.
+const autoNotesLines = 8
+
+// showChanges prints the changelog from current to latest; it never fails.
+func showChanges(env *Env, current, latest string, maxLines int) {
+	ctx, cancel := context.WithTimeout(context.Background(), autoCheckTimeout)
+	defer cancel()
+	env.Updates.ShowChanges(ctx, env.UI, current, latest, maxLines)
 }
 
 func updateCmd(env *Env) *cobra.Command {
@@ -87,7 +99,8 @@ func updateCmd(env *Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Verifica e instala a versão mais nova",
-		Long: `Baixa a última release, confere o SHA-256 publicado com ela e instala
+		Long: `Mostra o que mudou desde a sua versão (o changelog de cada release),
+baixa a última release, confere o SHA-256 publicado com ela e instala
 como o "server install" (troca atômica do binário e do deploy-ci).
 
 A verificação também é automática: no máximo uma vez por dia, os comandos
@@ -112,6 +125,7 @@ ou a variável DEPLOY_TOOLS_NO_UPDATE=1. O deploy da CI nunca consulta nada.`,
 				env.UI.OK("Já está na versão mais recente (%s; última release: %s).", env.Version, r.Version)
 				return nil
 			}
+			showChanges(env, env.Version, r.Version, 0)
 			if check {
 				env.UI.Println("Nova versão: " + r.Version + " (esta é " + env.Version + "). Atualize com: sudo deploy-tools update")
 				return nil
@@ -141,6 +155,7 @@ func iCheckUpdate(env *Env) error {
 		env.UI.OK("Está na versão mais recente.")
 		return nil
 	}
+	showChanges(env, env.Version, r.Version, 0)
 	if env.RequireRoot() != nil {
 		env.UI.Hint("Para atualizar: sudo deploy-tools update")
 		return nil
