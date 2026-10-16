@@ -19,6 +19,7 @@ func run(t *testing.T, input string, commit string, args ...string) (string, err
 	env := &Env{
 		UI:      &ui.UI{In: strings.NewReader(input), Out: &out, Interactive: input != "", Accessible: true},
 		Version: "v1.2.0", Commit: commit,
+		ForgesFile: filepath.Join(t.TempDir(), "forges.yml"),
 	}
 	root := NewRoot(env)
 	root.SetArgs(args)
@@ -147,8 +148,9 @@ func runWith(t *testing.T, input string, adjust func(*Env), args ...string) (str
 	t.Helper()
 	var out bytes.Buffer
 	env := &Env{
-		UI:      &ui.UI{In: strings.NewReader(input), Out: &out, Interactive: input != "", Accessible: true},
-		Version: "v1.2.0",
+		UI:         &ui.UI{In: strings.NewReader(input), Out: &out, Interactive: input != "", Accessible: true},
+		Version:    "v1.2.0",
+		ForgesFile: filepath.Join(t.TempDir(), "forges.yml"),
 	}
 	adjust(env)
 	root := NewRoot(env)

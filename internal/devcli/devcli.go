@@ -32,6 +32,10 @@ type Env struct {
 	Updates     update.Client
 	AutoUpdate  bool
 	UpdateStamp string
+
+	// ForgesFile overrides where the registered instances are kept
+	// (default <config dir>/deploy-dev/forges.yml; see forges.go).
+	ForgesFile string
 }
 
 func Execute(env *Env, args []string) int {
@@ -57,10 +61,12 @@ var errFindings = errors.New("check encontrou problemas")
 func NewRoot(env *Env) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "deploy-dev",
-		Short: "Configura o deploy de um projeto pelo GitHub Actions",
+		Short: "Configura o deploy de um projeto pelo GitHub, Gitea ou Forgejo Actions",
 		Long: `deploy-dev prepara o deploy de um projeto: detecta o tipo (Laravel,
-Symfony, React, Angular ou estático), gera o workflow do GitHub Actions
-(.github/workflows/deploy.yml) e confere os workflows que já existem.
+Symfony, React, Angular ou estático), gera o workflow de deploy (no GitHub,
+.github/workflows/deploy.yml; no Gitea e no Forgejo, .gitea/ ou
+.forgejo/workflows) e confere os workflows que já existem. Instâncias com
+domínio próprio são cadastradas com "deploy-dev forge add".
 
 Rode na sua máquina, dentro da pasta do projeto. O servidor é configurado
 com o deploy-tools.
@@ -92,7 +98,7 @@ Por onde começar:
 		&cobra.Group{ID: "project", Title: "Projeto:"},
 		&cobra.Group{ID: "self", Title: "Esta ferramenta:"},
 	)
-	for _, c := range []*cobra.Command{initCmd(env), checkCmd(env)} {
+	for _, c := range []*cobra.Command{initCmd(env), checkCmd(env), forgeCmd(env)} {
 		c.GroupID = "project"
 		root.AddCommand(c)
 	}
@@ -122,14 +128,19 @@ func initCmd(env *Env) *cobra.Command {
 	fl := &initFlags{}
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Cria o workflow de deploy do projeto (.github/workflows/deploy.yml)",
+		Short: "Cria o workflow de deploy do projeto (ex.: .github/workflows/deploy.yml)",
 		Long: `Detecta o tipo do projeto (Laravel, Symfony, React, Angular ou
 estático/mkdocs), mostra o que encontrou para você confirmar ou ajustar e
-gera o workflow de deploy para o GitHub Actions: actions fixadas por SHA,
-Commitizen (se o projeto usa) e a action de deploy do deploy-tools fixada
-no SHA desta versão.`,
+gera o workflow de deploy: actions fixadas por SHA, Commitizen (se o
+projeto usa) e a action de deploy do deploy-tools fixada no SHA desta
+versão.
+
+A instância (GitHub, Gitea ou Forgejo) vem do host do remote origin,
+comparado com as cadastradas em "deploy-dev forge"; sem remote, é o
+github.com. Escolha outra com --forge.`,
 		Example: `  deploy-dev init                 # interativo, no diretório atual
   deploy-dev init --yes           # aceita o que foi detectado
+  deploy-dev init --forge empresa # para uma instância cadastrada
   deploy-dev init --stdout        # só mostra, não grava`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return runInit(env, fl) },
@@ -139,6 +150,7 @@ no SHA desta versão.`,
 	f.StringVar(&fl.app, "app", "", "nome do app no servidor (padrão: nome do repositório)")
 	f.StringVarP(&fl.typ, "type", "t", "", "laravel | symfony | react | angular | static (padrão: detectado)")
 	f.StringVar(&fl.branch, "branch", "", "branch que dispara o deploy (padrão: main)")
+	f.StringVar(&fl.forge, "forge", "", "instância cadastrada (padrão: a do remote origin; veja deploy-dev forge list)")
 	f.BoolVarP(&fl.yes, "yes", "y", false, "não pergunta: usa o que foi detectado")
 	f.BoolVar(&fl.force, "force", false, "sobrescreve um deploy.yml existente")
 	f.BoolVar(&fl.stdout, "stdout", false, "imprime o workflow em vez de gravar")
@@ -148,11 +160,20 @@ no SHA desta versão.`,
 }
 
 type initFlags struct {
-	dir, app, typ, branch, actionRef string
-	yes, force, stdout               bool
+	dir, app, typ, branch, forge, actionRef string
+	yes, force, stdout                      bool
 }
 
-func workflowPath(dir string) string { return filepath.Join(dir, ".github", "workflows", "deploy.yml") }
+// deployWorkflow is the deploy.yml of whichever forge the project has one
+// for ("" if none).
+func deployWorkflow(dir string) string {
+	for _, f := range project.WorkflowFiles(dir) {
+		if filepath.Base(f) == "deploy.yml" {
+			return f
+		}
+	}
+	return ""
+}
 
 func runInit(env *Env, fl *initFlags) error {
 	o := project.Detect(fl.dir)
@@ -178,6 +199,11 @@ func runInit(env *Env, fl *initFlags) error {
 	if !interactive && !fl.yes && !fl.stdout {
 		return errors.New("sem terminal: passe --yes para aceitar a detecção (ou --stdout para só visualizar)")
 	}
+	forge, err := resolveForge(env, fl.dir, fl.forge, interactive)
+	if err != nil {
+		return err
+	}
+	o.Forge = forge
 	if interactive {
 		if err := reviewOptions(env, &o); err != nil {
 			return err
@@ -192,7 +218,7 @@ func runInit(env *Env, fl *initFlags) error {
 		return nil
 	}
 
-	path := workflowPath(fl.dir)
+	path := o.Forge.WorkflowPath(fl.dir)
 	if _, err := os.Stat(path); err == nil && !fl.force {
 		if !interactive {
 			return fmt.Errorf("%s já existe — use --force para sobrescrever (ou --stdout para comparar)", path)
@@ -211,7 +237,7 @@ func runInit(env *Env, fl *initFlags) error {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return err
 	}
-	env.UI.OK("Gerado %s (%s, app %s)", path, typeName(o.Type), o.App)
+	env.UI.OK("Gerado %s (%s, app %s, %s)", path, typeName(o.Type), o.App, o.Forge.Label())
 	env.UI.Steps("Próximos passos", nextSteps(fl.dir, o)...)
 	return nil
 }
@@ -235,6 +261,7 @@ func typeName(t string) string {
 // describe is what init will generate, in the words of the questions.
 func describe(o project.Options) [][2]string {
 	pairs := [][2]string{
+		{"repositório em", o.Forge.Label()},
 		{"app no servidor", o.App + "  (/var/www/" + o.App + ")"},
 		{"tipo", typeName(o.Type)},
 		{"deploy a cada push em", o.Branch},
@@ -295,6 +322,15 @@ func reviewOptions(env *Env, o *project.Options) error {
 	case "cancel":
 		return ui.ErrAborted
 	case "edit":
+		list, err := env.forges()
+		if err != nil {
+			return err
+		}
+		if len(list) > 1 {
+			if err := selectForge(env, list, &o.Forge, "Instância onde fica o repositório"); err != nil {
+				return err
+			}
+		}
 		return askOptions(env, o)
 	}
 	return nil
@@ -318,7 +354,7 @@ func askOptions(env *Env, o *project.Options) error {
 			}),
 		huh.NewSelect[string]().Title("Tipo (detectado: "+o.Type+")").Options(typeOpts...).Value(&o.Type),
 		huh.NewInput().Title("Branch que dispara o deploy").Value(&o.Branch),
-		huh.NewConfirm().Title("Versionar com Commitizen (bump + release no GitHub)?").
+		huh.NewConfirm().Title("Versionar com Commitizen (bump + release no "+project.KindName(o.Forge.Kind)+")?").
 			Affirmative("Sim").Negative("Não").Value(&o.Commitizen),
 	)); err != nil {
 		return err
@@ -379,15 +415,38 @@ func askOptions(env *Env, o *project.Options) error {
 func nextSteps(dir string, o project.Options) []string {
 	steps := []string{
 		"O app precisa existir no servidor: `sudo deploy-tools app create " + o.App + " --type " + o.Type + " --domain <domínio>`.",
-		"Crie os secrets DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY e DEPLOY_HOST_KEY (Settings → Secrets and variables → Actions; " +
-			"na organização, se vários repositórios publicam no mesmo servidor).",
 	}
-	if len(o.ViteVars) > 0 {
-		steps = append(steps, "Crie as variáveis do repositório (Settings → Secrets and variables → Actions → Variables): "+strings.Join(o.ViteVars, ", ")+".")
-	}
-	if o.Commitizen {
-		steps = append(steps, "Se a branch "+o.Branch+" for protegida, libere o push do github-actions[bot] (commit \"bump:\" e tag) "+
-			"ou troque o GITHUB_TOKEN por um PAT.")
+	f := o.Forge
+	if f.IsGitHub() {
+		steps = append(steps, "Crie os secrets DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY e DEPLOY_HOST_KEY (Settings → Secrets and variables → Actions; "+
+			"na organização, se vários repositórios publicam no mesmo servidor).")
+		if len(o.ViteVars) > 0 {
+			steps = append(steps, "Crie as variáveis do repositório (Settings → Secrets and variables → Actions → Variables): "+strings.Join(o.ViteVars, ", ")+".")
+		}
+		if o.Commitizen {
+			steps = append(steps, "Se a branch "+o.Branch+" for protegida, libere o push do github-actions[bot] (commit \"bump:\" e tag) "+
+				"ou troque o GITHUB_TOKEN por um PAT.")
+		}
+	} else {
+		name := project.KindName(f.Kind)
+		steps = append(steps,
+			"Ative o Actions no repositório (Configurações → Repositório → Actions) e confira se há um runner com o label "+f.RunsOn()+".",
+			"Crie os secrets DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY e DEPLOY_HOST_KEY (Configurações → Actions → Segredos; "+
+				"na organização, se vários repositórios publicam no mesmo servidor).")
+		if len(o.ViteVars) > 0 {
+			steps = append(steps, "Crie as variáveis do repositório (Configurações → Actions → Variáveis): "+strings.Join(o.ViteVars, ", ")+".")
+		}
+		if o.PrivateRegistry {
+			steps = append(steps, "O .npmrc usa o GitHub Packages: crie o secret GH_PACKAGES_TOKEN com um token do GitHub (read:packages).")
+		}
+		if o.Commitizen {
+			steps = append(steps, "O bump faz push do commit \"bump:\" e da tag em "+o.Branch+" com o token do Actions. "+
+				"Se a branch for protegida, crie o secret CI_BOT_TOKEN com o token de um usuário bot que possa fazer push nela.")
+		}
+		if f.ActionsURL == "" && f.Kind == project.Gitea {
+			steps = append(steps, "As actions vêm do github.com (padrão do "+name+"). Se a instância não alcança o github.com, "+
+				"cadastre um mirror: `deploy-dev forge add "+f.Name+" --force --kind "+f.Kind+" --url "+f.URL+" --actions-url <url>`.")
+		}
 	}
 	if o.Commitizen {
 		if _, err := os.Stat(filepath.Join(dir, "cz.toml")); err != nil {
@@ -405,11 +464,11 @@ func checkCmd(env *Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "check [dir]",
 		Short: "Confere os workflows do projeto e aponta problemas",
-		Long: `Verifica .github/workflows/*.yml: actions fixadas por SHA (com a versão
-comentada), formato do release id, passo de SSH copiado que pode virar a
-action do deploy-tools, restos de Gitea (contexto gitea.*, URL em uses:,
-checkout local da action), proteção contra loop do bump e versão da action
-de deploy.
+		Long: `Verifica os workflows de .github/, .gitea/ e .forgejo/workflows: actions
+fixadas por SHA (com a versão comentada), formato do release id, passo de
+SSH copiado que pode virar a action do deploy-tools, restos de Gitea nos
+workflows do GitHub (contexto gitea.*, URL em uses:, checkout local da
+action), proteção contra loop do bump e versão da action de deploy.
 
 Sai com código 1 se houver erros (ou avisos, com --strict).`,
 		Example: "  deploy-dev check\n  deploy-dev check ../outro-projeto --strict",

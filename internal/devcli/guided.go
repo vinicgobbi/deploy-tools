@@ -18,10 +18,7 @@ func guided(env *Env, dir string) error {
 }
 
 func devApp(env *Env, dir string) tui.App {
-	hasWorkflow := func() bool {
-		_, err := os.Stat(workflowPath(dir))
-		return err == nil
-	}
+	hasWorkflow := func() bool { return deployWorkflow(dir) != "" }
 	app := tui.App{
 		Title: "deploy-dev " + env.Version,
 		Subtitle: func() string {
@@ -48,7 +45,11 @@ func devApp(env *Env, dir string) tui.App {
 					Run:   func() error { return runInit(env, &initFlags{dir: dir}) },
 					Desc: func() string {
 						o := project.Detect(dir)
-						s := "Gera o " + workflowPath(dir) + " no padrão da organização. "
+						s := "Gera o workflow de deploy no padrão da organização"
+						if f, err := resolveForge(env, dir, "", false); err == nil {
+							s += " (" + f.WorkflowPath(dir) + ", " + f.Label() + ")"
+						}
+						s += ". "
 						if hasWorkflow() {
 							s += "O arquivo já existe: antes de sobrescrever, eu pergunto."
 						} else {
@@ -69,7 +70,7 @@ func devApp(env *Env, dir string) tui.App {
 						return nil
 					},
 					Desc: func() string {
-						s := "Valida os workflows de .github/workflows: actions fixadas por SHA (com a versão comentada), " +
+						s := "Valida os workflows de .github/, .gitea/ e .forgejo/workflows: actions fixadas por SHA (com a versão comentada), " +
 							"formato do release id, passo de SSH que pode virar a action de deploy, restos de Gitea " +
 							"(contexto gitea.*, URL em uses:) e proteção contra loop do bump."
 						if !hasWorkflow() {
