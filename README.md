@@ -574,7 +574,7 @@ com `deploy-dev version`, que mostra também o SHA da action de deploy que o
 Dentro do repositório do projeto:
 
 ```bash
-deploy-dev               # interface de tela cheia: gerar o workflow, checar, instalar no PATH
+deploy-dev               # interface de tela cheia: gerar o workflow, checar, instâncias, instalar no PATH
 deploy-dev init          # mostra o que detectou, deixa ajustar e grava .github/workflows/deploy.yml
 deploy-dev check         # valida os workflows (sai com código 1 se houver erro)
 deploy-dev forge         # instâncias de Gitea/Forgejo (ou GitHub) com domínio próprio
@@ -656,6 +656,9 @@ deploy-dev forge add empresa --kind gitea --url https://git.empresa.com
 deploy-dev forge add lab --kind forgejo --url https://code.lab.dev --runner docker
 deploy-dev forge list
 ```
+
+Ou pela interface de tela cheia (`deploy-dev`), na seção **Instâncias**:
+listar, cadastrar, editar e remover.
 
 O `init` escolhe a instância pelo host do remote `origin` (`git@git.empresa.com:...`
 ou `https://git.empresa.com/...`). Sem remote, gera para o github.com. Para
