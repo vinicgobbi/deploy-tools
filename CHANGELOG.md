@@ -1,3 +1,9 @@
+## v0.12.1 (2026-10-16)
+
+### Fix
+
+- deploy tenta de novo quando a conexão SSH falha e espera outro deploy em andamento
+
 ## v0.12.0 (2026-10-16)
 
 ### Feat
