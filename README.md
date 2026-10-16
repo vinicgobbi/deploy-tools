@@ -272,7 +272,7 @@ sudo deploy-tools server domain remove example.com     # os sites que já usam n
 ```
 
 Ao cadastrar, o comando diz se há um certificado `*.<domínio>` no servidor.
-Se não houver, num terminal (ou na TUI, em "Domínios coringa"), ele pergunta
+Se não houver, num terminal (ou na TUI, em "Domínio base (coringa)"), ele pergunta
 se você quer informar um. O certificado informado é validado: a chave
 precisa ser dele, ele precisa estar dentro da validade e ser coringa do
 domínio. Depois fica gravado em `BASE_CERT`. Com ele, todo app novo no

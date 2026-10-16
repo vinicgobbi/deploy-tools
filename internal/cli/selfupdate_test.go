@@ -134,7 +134,7 @@ func TestInvokedFromPATHHidesInstall(t *testing.T) {
 		return strings.Join(l, "|")
 	}
 	env, _ := testEnv(t, "")
-	if !strings.Contains(labels(env), "Certificados HTTPS|Instalar/atualizar|Verificar atualizações") {
+	if !strings.Contains(labels(env), "Secrets do GitHub|Instalar/atualizar|Verificar atualizações") {
 		t.Fatalf("loose copy must offer install: %s", labels(env))
 	}
 	env.FromPATH = true

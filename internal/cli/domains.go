@@ -8,6 +8,7 @@ import (
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
 	"github.com/vinicgobbi/deploy-tools/internal/tlscert"
+	"github.com/vinicgobbi/deploy-tools/internal/ui"
 )
 
 // certFlags registers --cert/--key/--chain on cmd.
@@ -21,7 +22,7 @@ func certFlags(cmd *cobra.Command, c *provision.CertChoice) {
 func domainCmd(env *Env) *cobra.Command {
 	dom := &cobra.Command{
 		Use:   "domain",
-		Short: "Domínios do site: listar, adicionar e remover",
+		Short: "Domínios de um app: listar, adicionar e remover",
 		Long: `O primeiro domínio é o ServerName do site; os outros são ServerAlias.
 Ao adicionar ou remover, se o certificado atual não cobrir o novo conjunto,
 o deploy-tools procura um que cubra e troca. Um site ativo é alterado com
@@ -96,7 +97,7 @@ func certCmd(env *Env) *cobra.Command {
 	var c provision.CertChoice
 	cmd := &cobra.Command{
 		Use:   "cert <app>",
-		Short: "Ativa ou troca o HTTPS do site (procura o certificado sozinho)",
+		Short: "Ativa ou troca o HTTPS de um app (procura o certificado sozinho)",
 		Long: `Sem flags, procura no servidor um certificado válido que cubra todos os
 domínios do site e tenha a chave privada correspondente:
   ` + strings.Join(tlscert.DefaultDirs, "\n  ") + `
@@ -138,7 +139,7 @@ Nunca troca um certificado real pelo autoassinado provisório.`,
 func certsCmd(env *Env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "certs",
-		Short: "Lista os certificados HTTPS encontrados no servidor",
+		Short: "Lista os certificados encontrados no servidor (só consulta)",
 		Long: `Mostra os certificados (com chave privada correspondente) que o
 deploy-tools encontra e pode usar nos sites, com os domínios cobertos e a
 validade. As pastas privadas só são legíveis como root.`,
@@ -161,8 +162,17 @@ validade. As pastas privadas só são legíveis como root.`,
 			}
 			now := env.now()
 			rows := [][]string{{"DOMÍNIOS", "VÁLIDO ATÉ", "ARQUIVO"}}
+			tones := []ui.Tone{ui.Plain}
 			for _, c := range certs {
 				until := c.NotAfter.Format("02/01/2006")
+				switch {
+				case now.After(c.NotAfter):
+					tones = append(tones, ui.Bad)
+				case c.SelfSign:
+					tones = append(tones, ui.Idle)
+				default:
+					tones = append(tones, ui.Good)
+				}
 				switch {
 				case now.After(c.NotAfter):
 					until += " (expirado)"
@@ -171,7 +181,12 @@ validade. As pastas privadas só são legíveis como root.`,
 				}
 				rows = append(rows, []string{strings.Join(c.Names, " "), until, c.String()})
 			}
-			printTable(env, rows)
+			printToned(env, rows, func(r, c int) ui.Tone {
+				if c == 1 {
+					return tones[r]
+				}
+				return ui.Plain
+			})
 			return nil
 		},
 	}

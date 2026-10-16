@@ -92,6 +92,14 @@ func tuiApp(env *Env) tui.App {
 					CLI: "deploy-tools app status <app>",
 				},
 				{
+					Label: "Rollback", Root: true, Run: rooted(func() error { return iRollback(env) }),
+					Desc: text("Volta um app para uma release anterior que ainda está em disco. Não refaz o build: " +
+						"só troca a release ativa, na hora.\n\nO próximo push publica uma release nova normalmente."),
+					CLI: "sudo deploy-tools release rollback <app> [release]",
+				},
+			}},
+			{Title: "Site de um app", Items: []tui.Item{
+				{
 					Label: "Colocar no ar", Root: true, Run: rooted(func() error { return iEnable(env) }),
 					Desc: func() string {
 						return "Coloca no ar o site de um app (a2ensite). A config do Apache é testada antes de mexer " +
@@ -111,17 +119,21 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools app disable <app>",
 				},
 				{
-					Label: "Domínios do site", Root: true, Run: rooted(func() error { return iDomains(env) }),
-					Desc: text("Adiciona ou remove domínios do site de um app. O primeiro é o principal (ServerName); " +
-						"os outros viram ServerAlias.\n\nSe o certificado atual não cobrir os domínios novos, procura " +
-						"um que cubra e troca. Um site ativo é testado antes e depois, e restaurado se algo falhar."),
+					Label: "Domínios do app", Root: true, Run: rooted(func() error { return iDomains(env) }),
+					Desc: text("Vale só para o app que você escolher: adiciona ou remove os domínios do site dele. " +
+						"O primeiro é o principal; os outros respondem pelo mesmo site.\n\n" +
+						"Se o certificado atual não cobrir os domínios novos, procura um que cubra e troca. Um site " +
+						"ativo é testado antes e depois, e restaurado se algo falhar.\n\n" +
+						"Para o domínio que os apps NOVOS ganham sozinhos, veja \"Domínio base (coringa)\" em Servidor."),
 					CLI: "sudo deploy-tools app domain add|remove <app> <domínio>...",
 				},
 				{
-					Label: "HTTPS do site", Root: true, Run: rooted(func() error { return iCert(env) }),
+					Label: "HTTPS do app", Root: true, Run: rooted(func() error { return iCert(env) }),
 					Desc: func() string {
-						return "Procura no servidor um certificado válido que cubra todos os domínios do site, com a " +
-							"chave correspondente, e troca no site. Use depois de emitir ou renovar (ex.: certbot).\n\n" +
+						return "Vale só para o app que você escolher: ativa ou troca o HTTPS do site dele. Procura um " +
+							"certificado válido que cubra todos os domínios do app e põe no site. Use depois de emitir ou " +
+							"renovar (ex.: certbot).\n\n" +
+							"Para só ver os certificados que existem no servidor, veja \"Certificados no servidor\".\n\n" +
 							"Procura em: " + strings.Join(env.Paths.CertDirs, ", ") + ".\n\n" +
 							apps("Sem HTTPS de verdade:", func(a provision.AppInfo) bool {
 								return a.Vhost != "" && (a.CertFile == "" || a.CertFile == config.FallbackCert)
@@ -129,12 +141,8 @@ func tuiApp(env *Env) tui.App {
 					},
 					CLI: "sudo deploy-tools app cert <app> [--cert arquivo --key arquivo]",
 				},
-				{
-					Label: "Voltar versão", Root: true, Run: rooted(func() error { return iRollback(env) }),
-					Desc: text("Volta um app para uma release anterior que ainda está em disco. Não refaz o build: " +
-						"só troca a release ativa, na hora.\n\nO próximo push publica uma release nova normalmente."),
-					CLI: "sudo deploy-tools release rollback <app> [release]",
-				},
+			}},
+			{Title: "Ajustes de um app", Items: []tui.Item{
 				{
 					Label: "Tipo e migrations", Root: true, Run: rooted(func() error { return iConfig(env) }),
 					Desc: func() string {
@@ -147,7 +155,7 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools app config <app> [--type t] [--migrate-on-deploy]",
 				},
 				{
-					Label: "Converter site existente", Root: true, Run: rooted(func() error { return iMigrate(env) }),
+					Label: "Converter site antigo", Root: true, Run: rooted(func() error { return iMigrate(env) }),
 					Desc: func() string {
 						return "Converte um app que serve direto de " + env.Paths.AppsRoot + "/<app> para o modelo de " +
 							"releases, sem tirar o site do ar: o conteúdo atual vira a primeira release e o site do " +
@@ -157,7 +165,7 @@ func tuiApp(env *Env) tui.App {
 					CLI: "sudo deploy-tools app migrate <app> --type ...",
 				},
 			}},
-			{Title: "Servidor", Items: []tui.Item{
+			{Title: "Servidor (vale para todos os apps)", Items: []tui.Item{
 				{
 					Label: "Preparar servidor", Root: true, Run: rooted(func() error { return iSetup(env) }),
 					Desc: text("Prepara um servidor novo: cria (ou corrige) o usuário " + env.Paths.DeployUser +
@@ -165,6 +173,28 @@ func tuiApp(env *Env) tui.App {
 						"autoriza um .pub seu ou pula. Pode rodar de novo sem problema."),
 					CLI: "sudo deploy-tools server setup [--generate-key | --key arquivo.pub]",
 				},
+				{
+					Label: "Domínio base (coringa)", Root: true, Run: rooted(func() error { return iBaseDomains(env) }),
+					Desc: func() string {
+						return "Vale para o servidor todo: cadastra o domínio base, como vinicgobbi.dev.br. Ao criar um " +
+							"app, ele ganha <nome>.<domínio base> sem você digitar. Com um certificado *.<domínio> " +
+							"cadastrado, todo app novo já sai com HTTPS.\n\n" +
+							"Não muda apps que já existem: para os domínios de um app, veja \"Domínios do app\".\n\n" +
+							tui.Capture(env.UI, func() { _ = doBaseDomains(env) })
+					},
+					CLI: "sudo deploy-tools server domain add|remove|list <domínio>",
+				},
+				{
+					Label: "Certificados no servidor", Run: func() error { return certsCmd(env).RunE(nil, nil) },
+					Desc: text("Só consulta, vale para o servidor todo: lista os certificados que o deploy-tools " +
+						"encontra no servidor e pode usar nos sites, com os domínios e a validade.\n\n" +
+						"Para ativar o HTTPS de um app, veja \"HTTPS do app\".\n\n" +
+						"Para fixar um certificado ou procurar em outras pastas, configure " + config.File +
+						" (SSL_CERT_FILE, SSL_CERT_KEY, SSL_SEARCH_DIRS)."),
+					CLI: "deploy-tools server certs",
+				},
+			}},
+			{Title: "GitHub", Items: []tui.Item{
 				{
 					Label: "Chaves do GitHub", Run: func() error { return doKeys(env) },
 					Desc: func() string {
@@ -196,22 +226,6 @@ func tuiApp(env *Env) tui.App {
 						"e os comandos gh equivalentes.\n\n⚠ " + secretsWarning),
 					CLI: "deploy-tools key secrets [--host h] [--repo dono/repo | --org org]",
 				},
-				{
-					Label: "Domínios coringa", Root: true, Run: rooted(func() error { return iBaseDomains(env) }),
-					Desc: func() string {
-						return "Domínios base, como vinicgobbi.dev.br: ao criar um app, você escolhe um deles e o app " +
-							"ganha <subdomínio>.<domínio>. Com um certificado *.<domínio> no servidor, todo app novo " +
-							"já sai com HTTPS válido.\n\n" + tui.Capture(env.UI, func() { _ = doBaseDomains(env) })
-					},
-					CLI: "sudo deploy-tools server domain add|remove|list <domínio>",
-				},
-				{
-					Label: "Certificados HTTPS", Run: func() error { return certsCmd(env).RunE(nil, nil) },
-					Desc: text("Lista os certificados que o deploy-tools encontra no servidor e pode usar nos sites, " +
-						"com os domínios e a validade.\n\nPara fixar um certificado ou procurar em outras pastas, " +
-						"configure " + config.File + " (SSL_CERT_FILE, SSL_CERT_KEY, SSL_SEARCH_DIRS)."),
-					CLI: "deploy-tools server certs",
-				},
 			}},
 		},
 	}
@@ -227,7 +241,7 @@ func tuiApp(env *Env) tui.App {
 	// Called by name, it is the installed binary (kept up to date by the
 	// automatic update): installing makes sense only for a loose copy.
 	if !env.FromPATH {
-		srv := &app.Sections[len(app.Sections)-2] // Servidor
+		tool := &app.Sections[len(app.Sections)-1] // Esta ferramenta
 		install := tui.Item{
 			Label: "Instalar/atualizar", Root: true, Run: rooted(func() error { return iInstall(env) }),
 			Desc: func() string {
@@ -239,7 +253,7 @@ func tuiApp(env *Env) tui.App {
 			},
 			CLI: "sudo deploy-tools server install",
 		}
-		srv.Items = append(srv.Items, install)
+		tool.Items = append([]tui.Item{install}, tool.Items...)
 	}
 	return app
 }
@@ -599,11 +613,11 @@ func nextStep(env *Env) string {
 	for _, a := range apps {
 		switch {
 		case needsMigration(a):
-			return a.Name + " serve sem versões (sem deploy pela CI): veja \"Converter site existente\"."
+			return a.Name + " serve sem versões (sem deploy pela CI): veja \"Converter site antigo\"."
 		case a.Vhost != "" && !a.VhostEnabled:
 			return "O site de " + a.Name + " está fora do ar: quando DNS e certificado estiverem prontos, use \"Colocar no ar\"."
 		case a.Vhost != "" && a.CertFile == "":
-			return a.Name + " está só em HTTP: instale um certificado e use \"HTTPS do site\"."
+			return a.Name + " está só em HTTP: instale um certificado e use \"HTTPS do app\"."
 		}
 	}
 	return ""

@@ -7,10 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/vinicgobbi/deploy-tools/internal/appconf"
 	"github.com/vinicgobbi/deploy-tools/internal/config"
@@ -159,12 +163,12 @@ func TestConfigDetectsType(t *testing.T) {
 }
 
 // In accessible mode the TUI is a numbered menu with the same items:
-// 1 Criar app, 2 Listar apps, 3 Ver um app, 4 Colocar no ar, 5 Tirar do ar,
-// 6 Domínios do site, 7 HTTPS do site, 8 Voltar versão, 9 Tipo e migrations,
-// 10 Converter site existente, 11 Preparar servidor, 12 Chaves do GitHub,
-// 13 Gerar ou adicionar chave, 14 Secrets do GitHub, 15 Domínios coringa,
-// 16 Certificados HTTPS, 17 Instalar/atualizar, 18 Verificar atualizações,
-// 19 Sair.
+// Apps: 1 Criar app, 2 Listar apps, 3 Ver um app, 4 Rollback.
+// Site de um app: 5 Colocar no ar, 6 Tirar do ar, 7 Domínios do app, 8 HTTPS do app.
+// Ajustes de um app: 9 Tipo e migrations, 10 Converter site antigo.
+// Servidor: 11 Preparar servidor, 12 Domínio base (coringa), 13 Certificados no servidor.
+// GitHub: 14 Chaves do GitHub, 15 Gerar ou adicionar chave, 16 Secrets do GitHub.
+// Esta ferramenta: 17 Instalar/atualizar, 18 Verificar atualizações. 19 Sair.
 
 func TestInteractiveCreate(t *testing.T) {
 	// 1 = Criar app. Then name, type (1 = Laravel), domain (1 = the
@@ -212,9 +216,9 @@ func TestInteractiveWithoutRootFailsBeforeAsking(t *testing.T) {
 }
 
 func TestInteractiveRollback(t *testing.T) {
-	// 8 = Voltar versão; app 1 (docs); release 1 (= "2", newest non-current);
+	// 4 = Rollback; app 1 (docs); release 1 (= "2", newest non-current);
 	// confirm y; 19 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"8", "1", "1", "y", "19"}, "\n")+"\n")
+	env, out := testEnv(t, strings.Join([]string{"4", "1", "1", "y", "19"}, "\n")+"\n")
 	_ = os.MkdirAll(env.Paths.AppDir("docs"), 0o755)
 	deployN(t, env, "docs", "1", "2", "3")
 	if err := runCLI(env); err != nil {
@@ -249,7 +253,7 @@ func TestStatusCard(t *testing.T) {
 }
 
 func TestInteractiveMigrate(t *testing.T) {
-	// 10 = Converter site existente; app 1 (docs, the only unmanaged one: "api" is already
+	// 10 = Converter site antigo; app 1 (docs, the only unmanaged one: "api" is already
 	// migrated and must not be offered); type 5 (Estático); confirm y;
 	// 19 = Sair.
 	env, out := testEnv(t, strings.Join([]string{"10", "1", "5", "y", "19"}, "\n")+"\n")
@@ -330,9 +334,9 @@ func TestInteractiveConfigNothingToDo(t *testing.T) {
 }
 
 func TestInteractiveDisable(t *testing.T) {
-	// 5 = Tirar do ar; app 1 (front, the only active site); confirm y;
+	// 6 = Tirar do ar; app 1 (front, the only active site); confirm y;
 	// 19 = Sair.
-	env, out := testEnv(t, "5\n1\ny\n19\n")
+	env, out := testEnv(t, "6\n1\ny\n19\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	for _, app := range []string{"front", "parado"} {
@@ -812,5 +816,32 @@ func TestNextStepGuidesANewServer(t *testing.T) {
 	env.RequireRoot = func() error { return errors.New("sem root") }
 	if step() != "" {
 		t.Fatalf("without root the header already says so: %q", steps)
+	}
+}
+
+func TestListAppsIsColoredAndAligned(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	env, out := testEnv(t, "")
+	for _, a := range []string{"um-app-de-nome-longo", "b"} {
+		if err := runCLI(env, "app", "create", a, "--type", "static"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out.Reset()
+	if err := runCLI(env, "app", "list"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "\x1b[") {
+		t.Fatalf("no color:\n%q", out)
+	}
+	// Without the escapes, the TIPO column starts at the same place on every line.
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(out.String(), "")
+	lines := strings.Split(strings.TrimSpace(plain), "\n")
+	col := strings.Index(lines[0], "TIPO")
+	for _, l := range lines[1:] {
+		if len([]rune(l)) <= col || []rune(l)[col-1] != ' ' || []rune(l)[col] == ' ' {
+			t.Fatalf("misaligned:\n%s", plain)
+		}
 	}
 }

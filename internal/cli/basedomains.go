@@ -10,6 +10,7 @@ import (
 	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
 	"github.com/vinicgobbi/deploy-tools/internal/tlscert"
+	"github.com/vinicgobbi/deploy-tools/internal/ui"
 	"github.com/vinicgobbi/deploy-tools/internal/validate"
 )
 
@@ -163,14 +164,21 @@ func doBaseDomains(env *Env) error {
 		return nil
 	}
 	rows := [][]string{{"DOMÍNIO", "APPS GANHAM", "CERTIFICADO CORINGA"}}
+	tones := []ui.Tone{ui.Plain}
 	for _, b := range env.Paths.BaseDomains {
-		cert := "nenhum *." + b + " no servidor"
+		cert, tone := "nenhum *."+b+" no servidor (apps só em HTTP)", ui.Bad
 		if c, ok := env.P.WildcardCert(b); ok {
-			cert = c.File + " (até " + c.NotAfter.Format("02/01/2006") + ")"
+			cert, tone = c.File+" (até "+c.NotAfter.Format("02/01/2006")+")", ui.Good
 		}
 		rows = append(rows, []string{b, "<app>." + b, cert})
+		tones = append(tones, tone)
 	}
-	printTable(env, rows)
+	printToned(env, rows, func(r, c int) ui.Tone {
+		if c == 2 {
+			return tones[r]
+		}
+		return ui.Plain
+	})
 	return nil
 }
 
@@ -181,7 +189,7 @@ func syncPaths(env *Env) { env.Paths = env.P.Paths }
 func baseDomainCmd(env *Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
-		Short: "Domínios coringa: os apps novos ganham <nome>.<domínio>",
+		Short: "Domínio base (coringa) do servidor: os apps novos ganham <nome>.<domínio>",
 		Long: `Cadastra domínios base (coringa), como vinicgobbi.dev.br. Ao criar um app
 sem --domain, ele ganha <subdomínio>.<domínio base>: com um só cadastrado,
 ele é usado direto; com vários, o deploy-tools pergunta qual usar (ou use

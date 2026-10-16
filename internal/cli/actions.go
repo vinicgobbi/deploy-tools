@@ -225,8 +225,10 @@ func doList(env *Env) error {
 	}
 	now := env.now()
 	rows := [][]string{{"APP", "TIPO", "SITUAÇÃO", "ÚLTIMO DEPLOY", "RELEASES"}}
+	tones := []ui.Tone{ui.Plain}
 	for _, a := range apps {
 		st := stateOf(a)
+		tones = append(tones, st.Tone)
 		last, n := "-", "-"
 		if a.Managed {
 			n = fmt.Sprint(len(a.Releases))
@@ -236,7 +238,15 @@ func doList(env *Env) error {
 		}
 		rows = append(rows, []string{a.Name, appType(a), st.Icon + " " + st.Text, last, n})
 	}
-	printTable(env, rows)
+	printToned(env, rows, func(r, c int) ui.Tone {
+		switch {
+		case c == 2:
+			return tones[r]
+		case rows[r][c] == "-":
+			return ui.Idle
+		}
+		return ui.Plain
+	})
 	return nil
 }
 
@@ -258,7 +268,12 @@ func doKeys(env *Env) error {
 		}
 		rows = append(rows, []string{k.Fingerprint(), k.Type, orDash(k.Comment), restr})
 	}
-	printTable(env, rows)
+	printToned(env, rows, func(r, c int) ui.Tone {
+		if c == 3 && keys[r-1].Command == "" {
+			return ui.Bad
+		}
+		return ui.Plain
+	})
 	return nil
 }
 
@@ -269,7 +284,12 @@ func orDash(s string) string {
 	return s
 }
 
-func printTable(env *Env, rows [][]string) {
+func printTable(env *Env, rows [][]string) { printToned(env, rows, nil) }
+
+// printToned prints rows as aligned columns, the first row as a faint
+// header. tone (optional) colors a body cell; it is applied after padding,
+// so colors never break the alignment.
+func printToned(env *Env, rows [][]string, tone func(row, col int) ui.Tone) {
 	widths := make([]int, len(rows[0]))
 	for _, r := range rows {
 		for i, c := range r {
@@ -279,9 +299,16 @@ func printTable(env *Env, rows [][]string) {
 	for ri, r := range rows {
 		var b strings.Builder
 		for i, c := range r {
-			b.WriteString(c + strings.Repeat(" ", widths[i]-len([]rune(c))+2))
+			pad := ""
+			if i < len(r)-1 {
+				pad = strings.Repeat(" ", widths[i]-len([]rune(c))+2)
+			}
+			if ri > 0 && tone != nil {
+				c = env.UI.Tone(tone(ri, i), c)
+			}
+			b.WriteString(c + pad)
 		}
-		line := strings.TrimRight(b.String(), " ")
+		line := b.String()
 		if ri == 0 {
 			line = env.UI.Faint(line)
 		}
