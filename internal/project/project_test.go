@@ -283,3 +283,160 @@ func TestAngularOutputDir(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteHostAndMatchForge(t *testing.T) {
+	for remote, want := range map[string]string{
+		"git@github.com:vinicgobbi/site.git":           "github.com",
+		"https://Git.Empresa.com/acme/site.git":        "git.empresa.com",
+		"ssh://git@git.empresa.com:2222/acme/site.git": "git.empresa.com",
+		"https://git.empresa.com:3000/acme/site":       "git.empresa.com:3000",
+		"gitea@git.empresa.com:acme/site.git":          "git.empresa.com",
+		"/srv/repos/site.git":                          "",
+		"":                                             "",
+	} {
+		if got := RemoteHost(remote); got != want {
+			t.Errorf("RemoteHost(%q) = %q, want %q", remote, got, want)
+		}
+	}
+	forges := []Forge{GitHubCom,
+		{Name: "empresa", Kind: Gitea, URL: "https://git.empresa.com"},
+		{Name: "lab", Kind: Forgejo, URL: "https://lab.acme.dev:3000"}}
+	for remote, want := range map[string]string{
+		"git@github.com:a/b.git":                 "github",
+		"ssh://git@git.empresa.com:2222/a/b.git": "empresa",
+		"https://lab.acme.dev:3000/a/b":          "lab",
+		"ssh://git@lab.acme.dev:22/a/b.git":      "lab", // ssh port is not the web one
+		"https://gitlab.com/a/b":                 "",
+	} {
+		f, ok := MatchForge(forges, remote)
+		if f.Name != want || ok != (want != "") {
+			t.Errorf("MatchForge(%q) = %q %v, want %q", remote, f.Name, ok, want)
+		}
+	}
+}
+
+func TestForgeUses(t *testing.T) {
+	cases := []struct {
+		f    Forge
+		want string
+	}{
+		{Forge{}, Checkout.Uses()},
+		{Forge{Kind: Gitea, URL: "https://g.x"}, Checkout.Uses()}, // instance default (github.com)
+		{Forge{Kind: Gitea, URL: "https://g.x", ActionsURL: "https://g.x/mirror/"}, "https://g.x/mirror/" + Checkout.Uses()},
+		{Forge{Kind: Forgejo, URL: "https://f.x"}, "https://github.com/" + Checkout.Uses()},
+	}
+	for _, c := range cases {
+		if got := c.f.Uses(Checkout); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.f, got, c.want)
+		}
+	}
+}
+
+func TestForgeValidate(t *testing.T) {
+	ok := Forge{Name: "empresa", Kind: Gitea, URL: "https://git.empresa.com"}
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []Forge{
+		{Name: "Empresa X", Kind: Gitea, URL: "https://g.x"},
+		{Name: "e", Kind: "gitlab", URL: "https://g.x"},
+		{Name: "e", Kind: Gitea, URL: "git.empresa.com"},
+		{Name: "e", Kind: Gitea, URL: "https://g.x", ActionsURL: "mirror"},
+		{Name: "e", Kind: Gitea, URL: "https://g.x", Runner: "a b"},
+	} {
+		if bad.Validate() == nil {
+			t.Errorf("%+v deveria ser inválida", bad)
+		}
+	}
+}
+
+var (
+	giteaForge   = Forge{Name: "empresa", Kind: Gitea, URL: "https://git.empresa.com"}
+	forgejoForge = Forge{Name: "lab", Kind: Forgejo, URL: "https://code.lab.dev", Runner: "docker"}
+)
+
+func TestRenderGiteaGoldenAndClean(t *testing.T) {
+	for _, c := range []struct {
+		kind  string
+		forge Forge
+	}{
+		{"laravel", giteaForge}, {"react", giteaForge}, {"plain", giteaForge},
+		{"symfony", forgejoForge}, {"mkdocs", forgejoForge},
+	} {
+		t.Run(c.forge.Kind+"-"+c.kind, func(t *testing.T) {
+			dir := fixture(t, c.kind)
+			o := Detect(dir)
+			o.ActionRef, o.ActionVersion = testRef, "v1.2.0"
+			o.Forge = c.forge
+			got, err := Render(o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			golden(t, c.forge.Kind+"-"+c.kind+".yml", got)
+
+			var doc struct {
+				Jobs map[string]struct {
+					RunsOn string `yaml:"runs-on"`
+					Steps  []struct {
+						Name string `yaml:"name"`
+						Uses string `yaml:"uses"`
+						Run  string `yaml:"run"`
+					} `yaml:"steps"`
+				} `yaml:"jobs"`
+			}
+			if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+				t.Fatalf("YAML inválido: %v\n%s", err, got)
+			}
+			if _, ok := doc.Jobs["build"]; ok {
+				t.Error("no Gitea/Forgejo, build e deploy são um job só")
+			}
+			for name, job := range doc.Jobs {
+				if job.RunsOn != c.forge.RunsOn() {
+					t.Errorf("%s: runs-on %q", name, job.RunsOn)
+				}
+				for _, s := range job.Steps {
+					if strings.Contains(s.Uses, "artifact") || strings.Contains(s.Run, "gh ") {
+						t.Errorf("%s/%s: passo só do GitHub: %s%s", name, s.Name, s.Uses, s.Run)
+					}
+					if s.Run != "" {
+						if out, err := exec.Command("bash", "-n", "-c", s.Run).CombinedOutput(); err != nil {
+							t.Errorf("%s/%s: bash -n: %v %s", name, s.Name, err, out)
+						}
+					}
+				}
+			}
+			write(t, dir, filepath.Join(c.forge.WorkflowDir(), "deploy.yml"), got)
+			fs, err := Check(dir, testRef, "v1.2.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range fs {
+				if f.Level > Info {
+					t.Errorf("finding no gerado: %s", f)
+				}
+			}
+		})
+	}
+}
+
+func TestCheckGiteaRules(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, ".gitea/workflows/deploy.yml", `jobs:
+  x:
+    if: "!startsWith(gitea.event.head_commit.message, 'bump:')"
+    steps:
+      - uses: https://gitea.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: https://gitea.com/actions/setup-node@v4
+      - uses: https://github.com/vinicgobbi/deploy-tools@1111111111111111111111111111111111111111 # v1.0.0
+`)
+	fs, _ := Check(dir, testRef, "v1.2.0")
+	var got []string
+	for _, f := range fs {
+		got = append(got, f.String())
+	}
+	all := strings.Join(got, "\n")
+	if !strings.Contains(all, `:6: erro: https://gitea.com/actions/setup-node usa referência mutável "v4"`) ||
+		!strings.Contains(all, ":7: info: action de deploy em v1.0.0") || len(fs) != 2 {
+		t.Errorf("findings:\n%s", all)
+	}
+}

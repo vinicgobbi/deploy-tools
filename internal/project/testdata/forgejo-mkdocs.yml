@@ -1,0 +1,58 @@
+# Gerado por deploy-dev v1.2.0 (deploy-dev init) para o Forgejo
+# (code.lab.dev). Pode editar à vontade; rode "deploy-dev check" para
+# validar contra as convenções.
+#
+# Etapas: deploy (build + publicação).
+# Build e deploy rodam no mesmo job: as actions oficiais de artefato (v4+)
+# não funcionam no Forgejo, e assim o pacote não sai do runner.
+name: Release and deploy
+
+on:
+  push:
+    branches:
+      - main
+
+# Um deploy por vez nesta branch: um push novo espera o anterior terminar.
+# Se o Forgejo ignorar isto, o deploy-ci do servidor já espera um deploy em
+# andamento terminar.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: company-docs
+
+jobs:
+
+  deploy:
+    runs-on: docker
+    permissions:
+      contents: read
+
+    steps:
+      - uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: https://github.com/actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build site
+        run: mkdocs build --strict --site-dir site
+
+      - name: Package release
+        run: tar -czf "$RUNNER_TEMP/release.tar.gz" -C site .
+
+      # Gera o release id (timestamp + sufixo), monta a chave num diretório
+      # temporário e envia o tarball ao deploy-ci do servidor.
+      - name: Deploy
+        uses: https://github.com/vinicgobbi/deploy-tools@66ac5741e772bfd2c2afb58b1d36527da520f3f6 # v1.2.0
+        with:
+          app: ${{ env.APP_NAME }}
+          archive: ${{ runner.temp }}/release.tar.gz
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host-key: ${{ secrets.DEPLOY_HOST_KEY }}

@@ -29,5 +29,9 @@ var (
 	DownloadArtifact = Pin{"actions/download-artifact", "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8.0.1"}
 )
 
+// CommitizenPy is the commitizen release pip installs on Gitea/Forgejo,
+// where the (Docker) commitizen-action may not run.
+const CommitizenPy = "4.19.1"
+
 // DeployToolsRepo hosts the composite deploy action (action.yml).
 const DeployToolsRepo = "vinicgobbi/deploy-tools"

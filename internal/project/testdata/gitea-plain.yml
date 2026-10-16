@@ -1,0 +1,48 @@
+# Gerado por deploy-dev v1.2.0 (deploy-dev init) para o Gitea
+# (git.empresa.com). Pode editar à vontade; rode "deploy-dev check" para
+# validar contra as convenções.
+#
+# Etapas: deploy (build + publicação).
+# Build e deploy rodam no mesmo job: as actions oficiais de artefato (v4+)
+# não funcionam no Gitea, e assim o pacote não sai do runner.
+name: Release and deploy
+
+on:
+  push:
+    branches:
+      - main
+
+# Um deploy por vez nesta branch: um push novo espera o anterior terminar.
+# O Gitea respeita isto a partir da 1.26; nas anteriores, o deploy-ci do
+# servidor já espera um deploy em andamento terminar.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: site
+
+jobs:
+
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Package release
+        run: tar -czf "$RUNNER_TEMP/release.tar.gz" -C . --exclude=./.git --exclude=./.github --exclude=./.gitea .
+
+      # Gera o release id (timestamp + sufixo), monta a chave num diretório
+      # temporário e envia o tarball ao deploy-ci do servidor.
+      - name: Deploy
+        uses: vinicgobbi/deploy-tools@66ac5741e772bfd2c2afb58b1d36527da520f3f6 # v1.2.0
+        with:
+          app: ${{ env.APP_NAME }}
+          archive: ${{ runner.temp }}/release.tar.gz
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host-key: ${{ secrets.DEPLOY_HOST_KEY }}

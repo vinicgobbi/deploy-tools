@@ -48,6 +48,9 @@ type Options struct {
 	BuildCommand  string // non-mkdocs static: optional build command
 	OutputDir     string // directory that becomes the release
 
+	// Where the repository lives; the zero value is github.com.
+	Forge Forge
+
 	// deploy-tools action version to pin (from this binary's build)
 	ActionRef     string
 	ActionVersion string

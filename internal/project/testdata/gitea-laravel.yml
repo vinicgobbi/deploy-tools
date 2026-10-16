@@ -1,0 +1,184 @@
+# Gerado por deploy-dev v1.2.0 (deploy-dev init) para o Gitea
+# (git.empresa.com). Pode editar à vontade; rode "deploy-dev check" para
+# validar contra as convenções.
+#
+# Etapas: validate → release → deploy (build + publicação).
+# Build e deploy rodam no mesmo job: as actions oficiais de artefato (v4+)
+# não funcionam no Gitea, e assim o pacote não sai do runner.
+name: Release and deploy
+
+on:
+  push:
+    branches:
+      - main
+
+# Um deploy por vez nesta branch: um push novo espera o anterior terminar.
+# O Gitea respeita isto a partir da 1.26; nas anteriores, o deploy-ci do
+# servidor já espera um deploy em andamento terminar.
+# O push do "bump:" dispara outro run (com um token de bot, ou conforme a
+# instância). Ele fica num grupo à parte: no mesmo grupo, o Gitea
+# cancelaria o job de deploy ainda pendente do run que fez o bump.
+concurrency:
+  group: ${{ startsWith(github.event.head_commit.message, 'bump:') && format('bump-{0}', github.sha) || format('deploy-{0}', github.ref) }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: api
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'bump:')"
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: "8.4"
+          coverage: none
+
+      # O servidor tem as extensões de produção; o runner só precisa
+      # validar, sem executar a aplicação.
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist --ignore-platform-req='ext-*'
+
+      - name: Check PHP syntax
+        run: find app config routes tests -name '*.php' -print0 | xargs -0 -n50 -P4 php -l > /dev/null
+
+      - name: Check code style (Pint)
+        run: vendor/bin/pint --test
+
+  # Versiona (Commitizen) e cria a release no Gitea. O commit "bump:"
+  # e a tag vão com o token do Actions (ou o CI_BOT_TOKEN); o "if" ignora o
+  # run que esse push dispara.
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      releases: write
+    outputs:
+      version: ${{ steps.cz.outputs.version }}
+      bumped: ${{ steps.cz.outputs.bumped }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # o cz precisa do histórico e das tags
+          # Faz o push do bump e da tag. Com a branch protegida, crie o
+          # secret CI_BOT_TOKEN com o token de um usuário bot que possa
+          # fazer push nela.
+          token: ${{ secrets.CI_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # O cz roda direto no runner, sem a action do Commitizen: ela é do
+      # tipo Docker, que nem todo runner do Gitea executa.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Commitizen
+        run: pip install commitizen==4.19.1
+
+      - name: Bump version with Commitizen
+        id: cz
+        run: |
+          git config user.name "gitea-actions"
+          git config user.email "gitea-actions@noreply.git.empresa.com"
+          set +e
+          cz bump --yes --changelog --changelog-to-stdout > body.md
+          code=$?
+          set -e
+          version="$(cz version --project)"
+          case "$code" in
+            0)
+              git push --atomic origin "HEAD:main" "v$version"
+              echo "bumped=true" >> "$GITHUB_OUTPUT"
+              ;;
+            3|21) # 3 = nenhum commit novo, 21 = só commits que não geram versão
+              echo "Nada para versionar."
+              echo "bumped=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              exit "$code"
+              ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Pela API do Gitea (o gh só fala com o GitHub). Se o job for
+      # re-executado e a release já existir, não cria outra.
+      - name: Create Gitea release
+        if: steps.cz.outputs.bumped == 'true'
+        env:
+          TOKEN: ${{ secrets.CI_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases
+          TAG: v${{ steps.cz.outputs.version }}
+        run: |
+          set -euo pipefail
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: token $TOKEN" "$API/tags/$TAG")
+          if [ "$status" = 200 ]; then
+            echo "A release $TAG já existe."
+            exit 0
+          fi
+          python3 -c 'import json, os; t = os.environ["TAG"]; print(json.dumps({"tag_name": t, "name": t, "body": open("body.md").read()}))' |
+            curl -fsS -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" --data @- "$API" > /dev/null
+          echo "Release $TAG criada."
+
+  deploy:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # A tag criada pelo bump (com o CHANGELOG), ou o commit do push.
+          ref: ${{ needs.release.outputs.bumped == 'true' && format('v{0}', needs.release.outputs.version) || github.sha }}
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: "8.4"
+          coverage: none
+
+      # Só as dependências de produção, com o autoload otimizado.
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --ignore-platform-req='ext-*'
+
+      - name: Package release
+        run: |
+          tar -czf "$RUNNER_TEMP/release.tar.gz" \
+            --exclude='./.git' \
+            --exclude='./.github' \
+            --exclude='./.gitea' \
+            --exclude='./tests' \
+            --exclude='./node_modules' \
+            --exclude='./.env' \
+            --exclude='./.env.*' \
+            --exclude='./phpunit.xml' \
+            --exclude='./cz.toml' \
+            --exclude='./.cz.toml' \
+            --exclude='./body.md' \
+            --exclude='./*.code-workspace' \
+            --exclude='./package.json' \
+            --exclude='./package-lock.json' \
+            --exclude='./pnpm-lock.yaml' \
+            --exclude='./pnpm-workspace.yaml' \
+            --exclude='./vite.config.js' \
+            --exclude='./vite.config.ts' \
+            .
+
+      # Gera o release id (timestamp + sufixo), monta a chave num diretório
+      # temporário e envia o tarball ao deploy-ci do servidor.
+      - name: Deploy
+        uses: vinicgobbi/deploy-tools@66ac5741e772bfd2c2afb58b1d36527da520f3f6 # v1.2.0
+        with:
+          app: ${{ env.APP_NAME }}
+          archive: ${{ runner.temp }}/release.tar.gz
+          release-suffix: v${{ needs.release.outputs.version }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host-key: ${{ secrets.DEPLOY_HOST_KEY }}

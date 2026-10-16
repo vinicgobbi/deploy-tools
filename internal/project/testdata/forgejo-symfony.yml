@@ -1,0 +1,116 @@
+# Gerado por deploy-dev v1.2.0 (deploy-dev init) para o Forgejo
+# (code.lab.dev). Pode editar à vontade; rode "deploy-dev check" para
+# validar contra as convenções.
+#
+# Etapas: validate → deploy (build + publicação).
+# Build e deploy rodam no mesmo job: as actions oficiais de artefato (v4+)
+# não funcionam no Forgejo, e assim o pacote não sai do runner.
+name: Release and deploy
+
+on:
+  push:
+    branches:
+      - main
+
+# Um deploy por vez nesta branch: um push novo espera o anterior terminar.
+# Se o Forgejo ignorar isto, o deploy-ci do servidor já espera um deploy em
+# andamento terminar.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: loja
+
+jobs:
+  validate:
+    runs-on: docker
+    permissions:
+      contents: read
+
+    steps:
+      - uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: https://github.com/shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: "8.3"
+          coverage: none
+
+      # O servidor tem as extensões de produção; o runner só precisa
+      # validar, sem executar a aplicação.
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist --ignore-platform-req='ext-*' --no-scripts
+
+      - name: Check PHP syntax
+        run: find src config migrations public -name '*.php' -print0 | xargs -0 -n50 -P4 php -l > /dev/null
+
+  deploy:
+    needs: validate
+    runs-on: docker
+    permissions:
+      contents: read
+
+    steps:
+      - uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: https://github.com/shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: "8.3"
+          coverage: none
+
+      # Só as dependências de produção, com o autoload otimizado.
+      - name: Install dependencies
+        env:
+          APP_ENV: prod
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev --optimize-autoloader --no-scripts --ignore-platform-req='ext-*'
+
+      # O cache (var/cache) é gerado no servidor, no caminho da release; aqui
+      # só os arquivos públicos dos bundles e o AssetMapper.
+      - name: Build public assets
+        env:
+          APP_ENV: prod
+          APP_DEBUG: "0"
+        run: |
+          php bin/console assets:install public --no-interaction
+          php bin/console asset-map:compile
+
+      - name: Package release
+        run: |
+          tar -czf "$RUNNER_TEMP/release.tar.gz" \
+            --exclude='./.git' \
+            --exclude='./.github' \
+            --exclude='./.forgejo' \
+            --exclude='./tests' \
+            --exclude='./node_modules' \
+            --exclude='./var' \
+            --exclude='./.env.local' \
+            --exclude='./.env.*.local' \
+            --exclude='./.env.test' \
+            --exclude='./phpunit.xml' \
+            --exclude='./phpunit.xml.dist' \
+            --exclude='./phpunit.dist.xml' \
+            --exclude='./.php-cs-fixer.cache' \
+            --exclude='./cz.toml' \
+            --exclude='./.cz.toml' \
+            --exclude='./body.md' \
+            --exclude='./*.code-workspace' \
+            --exclude='./package.json' \
+            --exclude='./package-lock.json' \
+            --exclude='./pnpm-lock.yaml' \
+            --exclude='./pnpm-workspace.yaml' \
+            --exclude='./vite.config.js' \
+            --exclude='./vite.config.ts' \
+            --exclude='./webpack.config.js' \
+            .
+
+      # Gera o release id (timestamp + sufixo), monta a chave num diretório
+      # temporário e envia o tarball ao deploy-ci do servidor.
+      - name: Deploy
+        uses: https://github.com/vinicgobbi/deploy-tools@66ac5741e772bfd2c2afb58b1d36527da520f3f6 # v1.2.0
+        with:
+          app: ${{ env.APP_NAME }}
+          archive: ${{ runner.temp }}/release.tar.gz
+          host: ${{ secrets.DEPLOY_HOST }}
+          user: ${{ secrets.DEPLOY_USER }}
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host-key: ${{ secrets.DEPLOY_HOST_KEY }}
