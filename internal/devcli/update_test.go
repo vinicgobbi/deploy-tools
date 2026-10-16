@@ -65,11 +65,11 @@ func TestGuidedHidesInstallFromPATH(t *testing.T) {
 		return strings.Join(l, "|")
 	}
 	env := &Env{Version: "v0.9.0"}
-	if got := titles(env); got != "Projeto|Instalação|Esta ferramenta" {
+	if got := titles(env); got != "Projeto|Instâncias|Instalação|Esta ferramenta" {
 		t.Fatalf("loose copy: %s", got)
 	}
 	env.FromPATH = true
-	if got := titles(env); got != "Projeto|Esta ferramenta" {
+	if got := titles(env); got != "Projeto|Instâncias|Esta ferramenta" {
 		t.Fatalf("from PATH: %s", got)
 	}
 }

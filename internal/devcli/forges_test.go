@@ -104,3 +104,41 @@ func TestInitRefusesUnknownRemoteHost(t *testing.T) {
 		t.Fatal("--forge inexistente aceito")
 	}
 }
+
+func TestGuidedManagesForges(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "forges.yml")
+	t.Chdir(t.TempDir())
+	isInstalled = func() bool { return true }
+	t.Cleanup(func() { isInstalled = installed })
+	steps := []string{
+		// 4 = Cadastrar: nome, tipo (2 = Gitea), url, actions (padrão), runner.
+		"4", "empresa", "2", "https://git.empresa.com", "", "linux",
+		// 5 = Editar: 1 = empresa; tipo 3 = Forgejo; mantém o resto.
+		"5", "1", "3", "https://code.empresa.com", "", "linux",
+		// 3 = Listar.
+		"3",
+		// 9 = Sair.
+		"9",
+	}
+	out, err := withForges(t, file, strings.Join(steps, "\n")+"\n")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(file)
+	for _, want := range []string{"name: empresa", "kind: forgejo", "url: https://code.empresa.com", "runner: linux"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("faltou %q em forges.yml:\n%s\n--- saída:\n%s", want, b, out)
+		}
+	}
+	if strings.Count(string(b), "name:") != 1 {
+		t.Errorf("editar duplicou a instância:\n%s", b)
+	}
+	// 6 = Remover: 1 = empresa; confirma.
+	out, err = withForges(t, file, "6\n1\ny\n9\n")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(file); strings.Contains(string(b), "empresa") {
+		t.Errorf("não removeu:\n%s\n--- saída:\n%s", b, out)
+	}
+}

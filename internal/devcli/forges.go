@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/vinicgobbi/deploy-tools/internal/project"
+	"github.com/vinicgobbi/deploy-tools/internal/ui"
 )
 
 // The registered instances (GitHub, Gitea or Forgejo on a custom domain)
@@ -316,4 +317,77 @@ func forgeRemoveCmd(env *Env) *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		RunE:    func(_ *cobra.Command, args []string) error { return removeForge(env, args[0]) },
 	}
+}
+
+// Guided (TUI) versions of forge add/edit/remove.
+
+func iAddForge(env *Env) error {
+	f := project.Forge{Kind: project.Gitea}
+	if err := env.UI.Input("Nome da instância", "empresa", &f.Name, func(s string) error {
+		return project.Forge{Name: s, Kind: project.Gitea, URL: "https://x"}.Validate()
+	}); err != nil {
+		return err
+	}
+	reg, err := env.registered()
+	if err != nil {
+		return err
+	}
+	force := false
+	if old, ok := findForge(reg, f.Name); ok {
+		if force, err = env.UI.Confirm("A instância "+f.Name+" já existe. Substituir?", old.Label()); err != nil {
+			return err
+		}
+		if !force {
+			return ui.ErrAborted
+		}
+		f = old
+	}
+	if err := askForge(env, &f); err != nil {
+		return err
+	}
+	return addForge(env, f, force)
+}
+
+// pickRegistered asks for one of the registered instances; ok is false
+// when there is none.
+func pickRegistered(env *Env, title string) (project.Forge, bool, error) {
+	reg, err := env.registered()
+	if err != nil || len(reg) == 0 {
+		if err == nil {
+			env.UI.Hint("Nenhuma instância cadastrada além do github.com: use \"Cadastrar instância\".")
+		}
+		return project.Forge{}, false, err
+	}
+	f := reg[0]
+	if err := selectForge(env, reg, &f, title); err != nil {
+		return project.Forge{}, false, err
+	}
+	return f, true, nil
+}
+
+func iEditForge(env *Env) error {
+	f, ok, err := pickRegistered(env, "Editar qual instância?")
+	if err != nil || !ok {
+		return err
+	}
+	if err := askForge(env, &f); err != nil {
+		return err
+	}
+	return addForge(env, f, true)
+}
+
+func iRemoveForge(env *Env) error {
+	f, ok, err := pickRegistered(env, "Remover qual instância?")
+	if err != nil || !ok {
+		return err
+	}
+	yes, err := env.UI.Confirm("Remover "+f.Label()+"?",
+		"Os workflows já gerados não mudam; só o init deixa de reconhecer "+f.Host()+".")
+	if err != nil {
+		return err
+	}
+	if !yes {
+		return ui.ErrAborted
+	}
+	return removeForge(env, f.Name)
 }

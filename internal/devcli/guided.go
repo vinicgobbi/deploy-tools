@@ -83,6 +83,45 @@ func devApp(env *Env, dir string) tui.App {
 			}},
 		},
 	}
+	forgeList := func() string { return tui.Capture(env.UI, func() { _ = listForges(env) }) }
+	app.Sections = append(app.Sections, tui.Section{Title: "Instâncias", Items: []tui.Item{
+		{
+			Label: "Listar instâncias",
+			Run:   func() error { return listForges(env) },
+			Desc: func() string {
+				return "As instâncias de GitHub, Gitea ou Forgejo para onde o \"Gerar workflow\" gera. Ele escolhe " +
+					"pelo host do remote origin do projeto.\n\n" + forgeList()
+			},
+			CLI: "deploy-dev forge list",
+		},
+		{
+			Label: "Cadastrar instância",
+			Run:   func() error { return iAddForge(env) },
+			Desc: func() string {
+				return "Cadastra um Gitea, um Forgejo ou um GitHub com domínio próprio: nome, endereço web, de onde " +
+					"vêm as actions (vazio = padrão da instância, ou um mirror) e o label do runner.\n\n" +
+					"Fica em " + env.forgesPath() + "."
+			},
+			CLI: "deploy-dev forge add <nome> --kind gitea --url https://git.empresa.com",
+		},
+		{
+			Label: "Editar instância",
+			Run:   func() error { return iEditForge(env) },
+			Desc: func() string {
+				return "Muda o tipo, o endereço, o mirror das actions ou o runner de uma instância cadastrada. " +
+					"Os workflows já gerados não mudam: gere de novo para aplicar."
+			},
+			CLI: "deploy-dev forge add <nome> --force ...",
+		},
+		{
+			Label: "Remover instância",
+			Run:   func() error { return iRemoveForge(env) },
+			Desc: func() string {
+				return "Remove uma instância cadastrada (o github.com é embutido e fica). Os workflows já gerados não mudam."
+			},
+			CLI: "deploy-dev forge remove <nome>",
+		},
+	}})
 	updates := tui.Section{Title: "Esta ferramenta", Items: []tui.Item{{
 		Label: "Verificar atualizações", Run: func() error { return iCheckUpdate(env) },
 		Desc: func() string {
