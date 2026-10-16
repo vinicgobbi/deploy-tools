@@ -1,3 +1,10 @@
+## v0.13.0 (2026-10-16)
+
+### Feat
+
+- **dev**: cadastra instâncias e escolhe a forja no init
+- **dev**: gera o workflow de deploy para Gitea e Forgejo
+
 ## v0.12.1 (2026-10-16)
 
 ### Fix
