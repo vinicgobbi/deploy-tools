@@ -80,6 +80,40 @@ func TestInitInteractiveOverridesDetection(t *testing.T) {
 	}
 }
 
+func TestInitInteractiveLaravelAssets(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "api")
+	for name, body := range map[string]string{
+		"artisan": "", "composer.json": `{"require":{"php":"^8.4"}}`,
+		"package.json": `{"scripts":{"build":"vite build"}}`, "package-lock.json": "{}",
+	} {
+		_ = os.MkdirAll(dir, 0o755)
+		_ = os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644)
+	}
+	// 2 = Ajustar; app, type 1 = Laravel, branch, commitizen n; PHP group:
+	// php, pint n, assets y; Node group: pm 1 = pnpm, node, vars.
+	answers := strings.Join([]string{"2", "api", "1", "main", "n", "8.3", "n", "y", "1", "22", ""}, "\n") + "\n"
+	out, err := run(t, answers, ref, "init", "-C", dir)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	wf, _ := os.ReadFile(filepath.Join(dir, ".github/workflows/deploy.yml"))
+	for _, want := range []string{"pnpm install --frozen-lockfile", "pnpm build", `node-version: "22"`, `php-version: "8.3"`} {
+		if !strings.Contains(string(wf), want) {
+			t.Errorf("faltou %q:\n%s", want, wf)
+		}
+	}
+
+	// Recusar os assets pula as perguntas do Node.
+	answers = strings.Join([]string{"2", "api", "1", "main", "n", "8.3", "n", "n"}, "\n") + "\n"
+	if out, err := run(t, answers, ref, "init", "--force", "-C", dir); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	wf, _ = os.ReadFile(filepath.Join(dir, ".github/workflows/deploy.yml"))
+	if strings.Contains(string(wf), "setup-node") {
+		t.Errorf("Node presente apesar de recusado:\n%s", wf)
+	}
+}
+
 func TestInitWithoutReleaseCommitFails(t *testing.T) {
 	_, err := run(t, "", "", "init", "--yes", "-C", reactProject(t))
 	if err == nil || !strings.Contains(err.Error(), "release") {

@@ -74,6 +74,15 @@ func TestDetect(t *testing.T) {
 		strings.Join(l.PHPDirs, ",") != "app,config,routes,tests" {
 		t.Errorf("laravel: %+v", l)
 	}
+	if l.ViteAssets {
+		t.Error("laravel sem package.json não tem assets para buildar")
+	}
+	lv := fixture(t, "laravel")
+	write(t, lv, "package.json", `{"scripts":{"build":"vite build"}}`)
+	write(t, lv, "pnpm-lock.yaml", "")
+	if l := Detect(lv); !l.ViteAssets || l.PackageManager != "pnpm" {
+		t.Errorf("laravel com vite: %+v", l)
+	}
 	r := Detect(fixture(t, "react"))
 	if r.Type != React || r.App != "front" || r.PackageManager != "pnpm" || !r.Lint || !r.PrivateRegistry ||
 		strings.Join(r.ViteVars, ",") != "VITE_API_URL_API,VITE_API_URL_GQL" || r.OutputDir != "dist" {

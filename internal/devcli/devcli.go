@@ -278,6 +278,11 @@ func describe(o project.Options) [][2]string {
 			[2]string{"PHP", o.PHPVersion},
 			[2]string{"AssetMapper", yesNo(o.AssetMapper)},
 			[2]string{"assets com Node (Encore/Vite)", yesNo(o.ViteAssets)})
+	}
+	if (o.Type == project.Laravel || o.Type == project.Symfony) && o.ViteAssets {
+		pairs = append(pairs, [2]string{"Node", o.NodeVersion + " · " + o.PackageManager})
+	}
+	switch o.Type {
 	case project.React, project.Angular:
 		pairs = append(pairs,
 			[2]string{"Node", o.NodeVersion + " · " + o.PackageManager},
@@ -373,16 +378,26 @@ func askOptions(env *Env, o *project.Options) error {
 		fields = append(fields,
 			huh.NewInput().Title("Versão do PHP").Value(&o.PHPVersion),
 			huh.NewConfirm().Title("Compilar o AssetMapper (asset-map:compile)?").Affirmative("Sim").Negative("Não").Value(&o.AssetMapper),
-			huh.NewConfirm().Title("Buildar assets com Node (Encore/Vite: npm run build)?").Affirmative("Sim").Negative("Não").Value(&o.ViteAssets),
+			huh.NewConfirm().Title("Buildar assets com Node (Encore/Vite: script build)?").Affirmative("Sim").Negative("Não").Value(&o.ViteAssets),
 		)
+	}
+	// The Node questions only make sense once the PHP group said yes to assets.
+	if o.Type == project.Laravel || o.Type == project.Symfony {
+		if err := env.UI.Run(huh.NewGroup(fields...)); err != nil {
+			return err
+		}
+		fields = nil
+		if o.ViteAssets {
+			fields = append(fields, nodeFields(o)...)
+		}
+	}
+	switch o.Type {
 	case project.React, project.Angular:
 		if o.Type == project.Angular {
 			fields = append(fields, huh.NewInput().Title("Pasta publicada (saída do ng build)").Value(&o.OutputDir))
 		}
+		fields = append(fields, nodeFields(o)...)
 		fields = append(fields,
-			huh.NewSelect[string]().Title("Gerenciador de pacotes").
-				Options(huh.NewOption("pnpm", "pnpm"), huh.NewOption("npm", "npm")).Value(&o.PackageManager),
-			huh.NewInput().Title("Versão do Node").Value(&o.NodeVersion),
 			huh.NewConfirm().Title("Rodar lint antes do build?").Affirmative("Sim").Negative("Não").Value(&o.Lint),
 		)
 	case project.Static:
@@ -410,6 +425,15 @@ func askOptions(env *Env, o *project.Options) error {
 		}
 	}
 	return nil
+}
+
+// nodeFields asks how the Node build runs (SPAs and PHP apps with assets).
+func nodeFields(o *project.Options) []huh.Field {
+	return []huh.Field{
+		huh.NewSelect[string]().Title("Gerenciador de pacotes").
+			Options(huh.NewOption("pnpm", "pnpm"), huh.NewOption("npm", "npm")).Value(&o.PackageManager),
+		huh.NewInput().Title("Versão do Node").Value(&o.NodeVersion),
+	}
 }
 
 func nextSteps(dir string, o project.Options) []string {

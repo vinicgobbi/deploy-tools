@@ -93,6 +93,7 @@ func Detect(dir string) Options {
 		comp := readComposer(dir)
 		o.PHPVersion = phpVersion(comp.Require["php"])
 		_, o.Pint = comp.RequireDev["laravel/pint"]
+		o.ViteAssets = pkg.Scripts["build"] != ""
 		for _, d := range []string{"app", "bootstrap", "config", "database", "routes", "tests"} {
 			if exists(dir, d) {
 				o.PHPDirs = append(o.PHPDirs, d)

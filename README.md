@@ -596,6 +596,10 @@ O `init` detecta:
   indica estático com mkdocs. Qualquer outro caso vira uma pasta pronta.
 - **Angular:** a pasta publicada vem do `angular.json` (o `outputPath` do
   projeto, mais `browser/` no builder `application` do Angular 17+).
+- **Laravel:** build dos assets do Vite (`public/build`) quando o
+  `package.json` tem script `build`, com pnpm ou npm conforme o lockfile.
+  Em "Ajustar antes de gerar" dá para desligar (APIs sem front) ou trocar
+  o gerenciador e a versão do Node.
 - **Symfony:** AssetMapper (`symfony/asset-mapper`, compila com
   `asset-map:compile`) e build Node (Encore/Vite, quando há script `build`).
   O `assets:install` sempre roda. O `var/` e o `.env.local` ficam fora do
