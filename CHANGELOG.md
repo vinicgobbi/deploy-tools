@@ -1,3 +1,9 @@
+## v0.15.0 (2026-10-21)
+
+### Feat
+
+- **init**: detecta e permite ajustar o build de assets do Laravel
+
 ## v0.14.0 (2026-10-16)
 
 ### Feat
