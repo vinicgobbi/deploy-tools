@@ -1,3 +1,13 @@
+## v0.16.0 (2026-10-25)
+
+### Feat
+
+- **app**: agendador do Laravel e edição do .deploy.conf
+
+### Fix
+
+- **init**: usa a versão do PHP exigida pelo composer.lock
+
 ## v0.15.0 (2026-10-21)
 
 ### Feat
