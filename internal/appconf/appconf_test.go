@@ -25,6 +25,34 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestScheduleRoundTripAndOnlyForLaravel(t *testing.T) {
+	dir := t.TempDir()
+	want := Conf{Type: "laravel", Migrate: true, Schedule: true}
+	if err := Write(dir, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := Read(dir); err != nil || got != want {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+	// Other types never get the key, so older deploy-ci versions (which
+	// reject unknown keys) keep reading their conf.
+	if err := Write(dir, Conf{Type: "react"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(Path(dir)); strings.Contains(string(b), "SCHEDULE") {
+		t.Fatalf("SCHEDULE gravado para react:\n%s", b)
+	}
+	// A conf written before the key existed reads as scheduler off.
+	_ = os.WriteFile(Path(dir), []byte("TYPE=laravel\nMIGRATE=yes\n"), 0o644)
+	if got, _, err := Read(dir); err != nil || got.Schedule || !got.Migrate {
+		t.Fatalf("conf antiga: %+v err=%v", got, err)
+	}
+	_ = os.WriteFile(Path(dir), []byte("TYPE=laravel\nSCHEDULE=talvez\n"), 0o644)
+	if _, _, err := Read(dir); err == nil {
+		t.Fatal("SCHEDULE inválido deveria falhar")
+	}
+}
+
 func TestReadRejectsGarbage(t *testing.T) {
 	for _, body := range []string{
 		"TYPE=php\n",

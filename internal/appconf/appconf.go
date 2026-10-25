@@ -23,8 +23,9 @@ import (
 const FileName = ".deploy.conf"
 
 type Conf struct {
-	Type    string // laravel | symfony | react | angular | static
-	Migrate bool   // PHP apps: run the database migrations on deploy
+	Type     string // laravel | symfony | react | angular | static
+	Migrate  bool   // PHP apps: run the database migrations on deploy
+	Schedule bool   // Laravel: run schedule:run every minute (cron entry kept by deploy-tools)
 }
 
 func Path(appDir string) string { return filepath.Join(appDir, FileName) }
@@ -58,13 +59,12 @@ func Read(appDir string) (c Conf, ok bool, err error) {
 			}
 			c.Type = val
 		case "MIGRATE", "LARAVEL_MIGRATE": // LARAVEL_MIGRATE: written up to v0.2
-			switch val {
-			case "yes":
-				c.Migrate = true
-			case "no", "":
-				c.Migrate = false
-			default:
-				return Conf{}, false, fmt.Errorf("%s:%d: %s must be yes or no", FileName, n, key)
+			if c.Migrate, err = yesNo(key, val, n); err != nil {
+				return Conf{}, false, err
+			}
+		case "SCHEDULE":
+			if c.Schedule, err = yesNo(key, val, n); err != nil {
+				return Conf{}, false, err
 			}
 		default:
 			return Conf{}, false, fmt.Errorf("%s:%d: unknown key %q", FileName, n, key)
@@ -76,7 +76,19 @@ func Read(appDir string) (c Conf, ok bool, err error) {
 	return c, true, nil
 }
 
+func yesNo(key, val string, line int) (bool, error) {
+	switch val {
+	case "yes":
+		return true, nil
+	case "no", "":
+		return false, nil
+	}
+	return false, fmt.Errorf("%s:%d: %s must be yes or no", FileName, line, key)
+}
+
 // Write replaces the conf atomically (temp file + rename), mode 0644.
+// SCHEDULE is written only for Laravel, so the conf of other apps stays
+// readable by deploy-ci versions that predate the key.
 func Write(appDir string, c Conf) error {
 	if err := validate.Type(c.Type); err != nil {
 		return err
@@ -88,6 +100,9 @@ func Write(appDir string, c Conf) error {
 	body := "# Gerado por deploy-tools. Edite com: deploy-tools app config <app>\n" +
 		"TYPE=" + c.Type + "\n" +
 		"MIGRATE=" + migrate + "\n"
+	if c.Type == validate.Laravel {
+		body += "SCHEDULE=" + map[bool]string{true: "yes", false: "no"}[c.Schedule] + "\n"
+	}
 
 	tmp := Path(appDir) + ".tmp"
 	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {

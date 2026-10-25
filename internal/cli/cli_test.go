@@ -165,7 +165,7 @@ func TestConfigDetectsType(t *testing.T) {
 // In accessible mode the TUI is a numbered menu with the same items:
 // Apps: 1 Criar app, 2 Listar apps, 3 Ver um app, 4 Rollback.
 // Site de um app: 5 Colocar no ar, 6 Tirar do ar, 7 Domínios do app, 8 HTTPS do app.
-// Ajustes de um app: 9 Tipo e migrations, 10 Converter site antigo.
+// Ajustes de um app: 9 Tipo, migrations e agendador, 10 Converter site antigo.
 // Servidor: 11 Preparar servidor, 12 Domínio base (coringa), 13 Certificados no servidor.
 // GitHub: 14 Chaves do GitHub, 15 Gerar ou adicionar chave, 16 Secrets do GitHub.
 // Esta ferramenta: 17 Instalar/atualizar, 18 Verificar atualizações. 19 Sair.
@@ -173,17 +173,20 @@ func TestConfigDetectsType(t *testing.T) {
 func TestInteractiveCreate(t *testing.T) {
 	// 1 = Criar app. Then name, type (1 = Laravel), domain (1 = the
 	// example.com base; empty subdomain keeps the app name; no extra
-	// domains), no certificate (n), migrations y, enable n, confirm y. The menu comes back
-	// below the result: 19 = Sair.
-	answers := strings.Join([]string{"1", "minha-api", "1", "1", "", "", "n", "y", "n", "y", "19"}, "\n") + "\n"
+	// domains), no certificate (n), migrations y, scheduler y, enable n, confirm y. The menu
+	// comes back below the result: 19 = Sair.
+	answers := strings.Join([]string{"1", "minha-api", "1", "1", "", "", "n", "y", "y", "n", "y", "19"}, "\n") + "\n"
 	env, out := testEnv(t, answers)
 	env.UI.ClearScreen = true
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	c, ok, err := appconf.Read(env.Paths.AppDir("minha-api"))
-	if err != nil || !ok || c.Type != "laravel" || !c.Migrate {
+	if err != nil || !ok || c.Type != "laravel" || !c.Migrate || !c.Schedule {
 		t.Fatalf("conf = %+v ok=%v err=%v\n%s", c, ok, err, out)
+	}
+	if _, err := os.Stat(env.Paths.CronFile("minha-api")); err != nil {
+		t.Fatalf("cron do agendador: %v\n%s", err, out)
 	}
 	vhost, err := os.ReadFile(env.Paths.VhostFile("minha-api"))
 	if err != nil || !strings.Contains(string(vhost), "ServerName minha-api.example.com") {
@@ -297,10 +300,10 @@ func selectOptions(out, title string) []string {
 	return opts
 }
 
-func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
-	// 9 = Tipo e migrations; app 1 (semconf, the only one offered); type 5
-	// (Estático); 19 = Sair.
-	env, out := testEnv(t, strings.Join([]string{"9", "1", "5", "19"}, "\n")+"\n")
+func TestInteractiveConfigOffersEveryManagedApp(t *testing.T) {
+	// 9 = Tipo, migrations e agendador; app 2 (semconf: comconf comes first,
+	// the unmigrated legado is not offered); type 5 (Estático); 19 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"9", "2", "5", "19"}, "\n")+"\n")
 	in := env.UI.Interactive
 	env.UI.Interactive = false
 	if err := runCLI(env, "app", "create", "comconf", "--type", "react"); err != nil {
@@ -314,11 +317,118 @@ func TestInteractiveConfigOffersOnlyAppsWithoutConf(t *testing.T) {
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if opts := selectOptions(out.String(), "Configurar qual app?"); len(opts) != 1 || !strings.Contains(opts[0], "semconf") {
+	if opts := selectOptions(out.String(), "Configurar qual app?"); len(opts) != 2 ||
+		!strings.Contains(opts[0], "comconf") || !strings.Contains(opts[1], "semconf") {
 		t.Fatalf("opções = %q\n%s", opts, out)
 	}
 	if c, ok, _ := appconf.Read(env.Paths.AppDir("semconf")); !ok || c.Type != "static" {
 		t.Fatalf("conf = %+v\n%s", c, out)
+	}
+}
+
+func TestInteractiveConfigEditsExistingConf(t *testing.T) {
+	// 9 = Tipo, migrations e agendador; app 1; type: Enter keeps the current
+	// one (Laravel); migrations y; scheduler y; 19 = Sair.
+	env, out := testEnv(t, strings.Join([]string{"9", "1", "", "y", "y", "19"}, "\n")+"\n")
+	in := env.UI.Interactive
+	env.UI.Interactive = false
+	if err := runCLI(env, "app", "create", "api", "--type", "laravel"); err != nil {
+		t.Fatal(err)
+	}
+	env.UI.Interactive = in
+	out.Reset()
+	if err := runCLI(env); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	c, _, _ := appconf.Read(env.Paths.AppDir("api"))
+	if c.Type != "laravel" || !c.Migrate || !c.Schedule {
+		t.Fatalf("conf = %+v\n%s", c, out)
+	}
+	if !strings.Contains(out.String(), "Tipo de api") {
+		t.Fatalf("o tipo deveria ser oferecido ao editar:\n%s", out)
+	}
+}
+
+func TestConfigSchedule(t *testing.T) {
+	env, out := testEnv(t, "")
+	if err := runCLI(env, "app", "create", "api", "--type", "laravel", "--migrate-on-deploy"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(env.Paths.CronFile("api")); err == nil {
+		t.Fatal("sem --schedule, o create não deveria criar o cron")
+	}
+
+	if err := runCLI(env, "app", "config", "api", "--schedule"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	c, _, _ := appconf.Read(env.Paths.AppDir("api"))
+	if !c.Schedule || !c.Migrate {
+		t.Fatalf("--schedule deve ligar o agendador e manter as migrations: %+v", c)
+	}
+	cron, err := os.ReadFile(env.Paths.CronFile("api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "* * * * * www-data [ -f " + env.Paths.CurrentLink("api") + "/artisan ] && cd " +
+		env.Paths.CurrentLink("api") + " && php artisan schedule:run >> /dev/null 2>&1\n"; !strings.HasSuffix(string(cron), want) {
+		t.Fatalf("cron:\n%s\nquer terminar com:\n%s", cron, want)
+	}
+
+	out.Reset()
+	if err := runCLI(env, "app", "status", "api"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "agendador: sim") {
+		t.Fatalf("status:\n%s", out)
+	}
+
+	// Cron removed by hand: the status says how to recreate it.
+	_ = os.Remove(env.Paths.CronFile("api"))
+	out.Reset()
+	_ = runCLI(env, "app", "status", "api")
+	if !strings.Contains(out.String(), "falta "+env.Paths.CronFile("api")) {
+		t.Fatalf("status sem o cron:\n%s", out)
+	}
+
+	if err := runCLI(env, "app", "config", "api", "--schedule"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI(env, "app", "config", "api", "--no-schedule"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(env.Paths.CronFile("api")); err == nil {
+		t.Fatal("--no-schedule deveria remover o cron")
+	}
+	if c, _, _ := appconf.Read(env.Paths.AppDir("api")); c.Schedule || !c.Migrate {
+		t.Fatalf("conf depois de --no-schedule = %+v", c)
+	}
+}
+
+func TestScheduleOnlyForLaravel(t *testing.T) {
+	env, _ := testEnv(t, "")
+	if err := runCLI(env, "app", "create", "front", "--type", "react", "--schedule"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(env.Paths.CronFile("front")); err == nil {
+		t.Fatal("app React não tem agendador")
+	}
+	err := runCLI(env, "app", "config", "front", "--schedule")
+	if err == nil || !strings.Contains(err.Error(), "só existe para apps Laravel") {
+		t.Fatalf("err = %v", err)
+	}
+
+	// Switching a scheduled Laravel app to another type drops the cron.
+	if err := runCLI(env, "app", "create", "api", "--type", "laravel", "--schedule"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI(env, "app", "config", "api", "--type", "static"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(env.Paths.CronFile("api")); err == nil {
+		t.Fatal("o cron deveria sumir ao trocar o tipo")
+	}
+	if b, _ := os.ReadFile(appconf.Path(env.Paths.AppDir("api"))); strings.Contains(string(b), "SCHEDULE") {
+		t.Fatalf("SCHEDULE só é gravado para Laravel:\n%s", b)
 	}
 }
 
@@ -328,7 +438,7 @@ func TestInteractiveConfigNothingToDo(t *testing.T) {
 	if err := runCLI(env); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if !strings.Contains(out.String(), "todos os apps migrados já têm .deploy.conf") {
+	if !strings.Contains(out.String(), "nenhum app no modelo de releases") {
 		t.Fatalf("output:\n%s", out)
 	}
 }

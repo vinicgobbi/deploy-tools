@@ -162,6 +162,9 @@ func printAppCard(env *Env, info provision.AppInfo) {
 		if validate.IsPHP(info.Conf.Type) {
 			deploy += " · migrations a cada deploy: " + yesNo(info.Conf.Migrate)
 		}
+		if info.Conf.Type == validate.Laravel {
+			deploy += " · agendador: " + yesNo(info.Conf.Schedule)
+		}
 	}
 	pairs = append(pairs, [2]string{"tipo", deploy})
 	if info.Current != "" {
@@ -195,6 +198,17 @@ func printAppCard(env *Env, info provision.AppInfo) {
 	}
 	if info.Managed && info.Conf == nil {
 		todo = append(todo, "Sem .deploy.conf: grave o tipo com sudo deploy-tools app config "+info.Name)
+	}
+	if c := info.Conf; c != nil {
+		wantCron := c.Schedule && c.Type == validate.Laravel
+		switch {
+		case wantCron && !info.Scheduled:
+			todo = append(todo, "O agendador está ligado, mas falta "+env.Paths.CronFile(info.Name)+
+				". Recrie com: sudo deploy-tools app config "+info.Name+" --schedule")
+		case !wantCron && info.Scheduled:
+			todo = append(todo, env.Paths.CronFile(info.Name)+" existe, mas o agendador está desligado no .deploy.conf. "+
+				"Remova com: sudo deploy-tools app config "+info.Name+" --no-schedule")
+		}
 	}
 	if len(todo) > 0 {
 		env.UI.Println()

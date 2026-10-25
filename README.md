@@ -316,9 +316,9 @@ qualquer chave sem `command=`.
 
 ```
 deploy-tools                                    # interface de tela cheia
-deploy-tools app create <app> --type laravel|symfony|react|angular|static [-d dominio]... | [--base b [--sub s]] [--cert c --key k [--chain b]] [--migrate-on-deploy] [--enable]
+deploy-tools app create <app> --type laravel|symfony|react|angular|static [-d dominio]... | [--base b [--sub s]] [--cert c --key k [--chain b]] [--migrate-on-deploy] [--schedule] [--enable]
 deploy-tools app migrate <app> --type ... [--vhost arquivo] [--yes]
-deploy-tools app config <app> [--type t] [--migrate-on-deploy | --no-migrate-on-deploy]
+deploy-tools app config <app> [--type t] [--migrate-on-deploy | --no-migrate-on-deploy] [--schedule | --no-schedule]
 deploy-tools app domain list|add|remove <app> [dominio]...
 deploy-tools app cert <app> [--cert c --key k [--chain b]]
 deploy-tools app enable <app>
@@ -434,6 +434,7 @@ já cria a release seguinte normalmente.
 ```
 TYPE=laravel
 MIGRATE=no
+SCHEDULE=no
 ```
 
 O `LARAVEL_MIGRATE` das versões anteriores continua sendo lido. Em apps
@@ -468,6 +469,44 @@ Para apps sem `.deploy.conf` (por exemplo, migrados), ligue os hooks com:
 ```bash
 sudo deploy-tools app config sistema --type laravel     # ou symfony; sem --type: detecta pelo current/
 sudo deploy-tools app config sistema --migrate-on-deploy
+```
+
+O mesmo comando edita a config de um app que já tem `.deploy.conf`: o que
+não for passado por flag é perguntado num terminal, com o valor atual já
+selecionado. Na TUI, o item **Tipo, migrations e agendador** oferece todos
+os apps no modelo de releases (com ou sem `.deploy.conf`).
+
+### Agendador do Laravel
+
+Apps Laravel que usam o agendador (`routes/console.php`) precisam do
+`schedule:run` a cada minuto. Ligue com:
+
+```bash
+sudo deploy-tools app create painel --type laravel --schedule   # já na criação
+sudo deploy-tools app config painel --schedule                  # num app existente
+sudo deploy-tools app config painel --no-schedule               # desliga
+```
+
+Isso grava `SCHEDULE=yes` no `.deploy.conf` e cria
+`/etc/cron.d/deploy-tools-<app>` (root, modo 644):
+
+```
+* * * * * www-data [ -f /var/www/<app>/current/artisan ] && cd /var/www/<app>/current && php artisan schedule:run >> /dev/null 2>&1
+```
+
+- Roda como `www-data`, o mesmo usuário que executa o app no Apache
+  (mod_php). Assim, os arquivos de cache e de log criados pelo agendador
+  continuam graváveis pelo site.
+- Passa por `current/`: cada deploy vale a partir do minuto seguinte, sem
+  mexer no arquivo. Antes da primeira release, não faz nada.
+- Tarefas com intervalo menor que um minuto (`everyThirtySeconds()`...)
+  funcionam: o `schedule:run` fica no ar até o fim do minuto.
+- O `.deploy.conf` manda: o `app config` cria ou remove o arquivo para
+  ficar igual a ele. O `app status` avisa se os dois divergirem (por
+  exemplo, o arquivo apagado à mão). Como os dois são do root, a chave da
+  CI não liga nem desliga o agendador.
+- `SCHEDULE` só é gravado em apps Laravel. Trocar o tipo de um app remove
+  o agendador.
 ```
 
 ## Por que existe `shared/`

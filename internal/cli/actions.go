@@ -316,7 +316,19 @@ func printToned(env *Env, rows [][]string, tone func(row, col int) ui.Tone) {
 	}
 }
 
-func doConfig(env *Env, app, typ string, migrate *bool) error {
+// configChange is what `app config` (or the TUI) changes in an app's
+// .deploy.conf. A nil field keeps the current value; in a terminal, it is
+// asked, with the current value preselected.
+type configChange struct {
+	Type     string
+	Migrate  *bool
+	Schedule *bool
+	// AskType offers the type even when the conf already has one (editing
+	// in the TUI); otherwise it is asked only when missing.
+	AskType bool
+}
+
+func doConfig(env *Env, app string, ch configChange) error {
 	if err := env.RequireRoot(); err != nil {
 		return err
 	}
@@ -328,9 +340,10 @@ func doConfig(env *Env, app, typ string, migrate *bool) error {
 		return err
 	}
 	c := existing
-	if typ != "" {
-		c.Type = typ
-	} else if !ok || c.Type == "" {
+	switch {
+	case ch.Type != "":
+		c.Type = ch.Type
+	case !ok || c.Type == "":
 		detected := appconf.DetectType(env.Paths.CurrentLink(app))
 		c.Type = detected
 		if env.UI.Interactive {
@@ -340,14 +353,29 @@ func doConfig(env *Env, app, typ string, migrate *bool) error {
 		} else {
 			env.UI.Println("Tipo detectado: " + detected)
 		}
+	case ch.AskType && env.UI.Interactive:
+		if err := env.UI.Select("Tipo de "+app, &c.Type, typeOptions()...); err != nil {
+			return err
+		}
 	}
 	if err := validate.Type(c.Type); err != nil {
 		return err
 	}
-	if migrate != nil {
-		c.Migrate = *migrate
+	if ch.Schedule != nil && *ch.Schedule && c.Type != validate.Laravel {
+		return fmt.Errorf("o agendador (--schedule) só existe para apps Laravel; %s é %s", app, typeName(c.Type))
+	}
+	if ch.Migrate != nil {
+		c.Migrate = *ch.Migrate
 	} else if validate.IsPHP(c.Type) && env.UI.Interactive {
-		if c.Migrate, err = env.UI.Confirm("Rodar "+release.MigrateCommand(c.Type)+" a cada deploy?", ""); err != nil {
+		if c.Migrate, err = env.UI.ConfirmDefault("Rodar "+release.MigrateCommand(c.Type)+" a cada deploy?", "", c.Migrate); err != nil {
+			return err
+		}
+	}
+	if ch.Schedule != nil {
+		c.Schedule = *ch.Schedule
+	} else if c.Type == validate.Laravel && env.UI.Interactive {
+		if c.Schedule, err = env.UI.ConfirmDefault("Rodar o agendador do Laravel (schedule:run a cada minuto)?",
+			scheduleDescription(env, app), c.Schedule); err != nil {
 			return err
 		}
 	}
@@ -358,6 +386,9 @@ func doConfig(env *Env, app, typ string, migrate *bool) error {
 	case validate.Laravel:
 		env.UI.Println("Próximos deploys rodam storage:link, config:cache, route:cache, view:cache" +
 			map[bool]string{true: " e migrate --force.", false: "."}[c.Migrate])
+		if c.Schedule {
+			env.UI.Println("O agendador roda a cada minuto como " + env.Paths.WebUser + ", sempre na release ativa.")
+		}
 	case validate.Symfony:
 		env.UI.Println("Próximos deploys rodam cache:clear --env=prod" +
 			map[bool]string{true: " e doctrine:migrations:migrate.", false: "."}[c.Migrate])
@@ -376,4 +407,10 @@ func hint(err error, app string) error {
 		return fmt.Errorf("%w — veja as disponíveis com `deploy-tools release list %s`", err, app)
 	}
 	return err
+}
+
+// scheduleDescription explains the scheduler question.
+func scheduleDescription(env *Env, app string) string {
+	return "Cria " + env.Paths.CronFile(app) + ": php artisan schedule:run a cada minuto, como " +
+		env.Paths.WebUser + ", na release ativa. Só ligue se o app usa o agendador (routes/console.php)."
 }

@@ -21,7 +21,8 @@ type CreateOptions struct {
 	Base            string     // registered base domain; default: the only one registered
 	Sub             string     // subdomain of Base; default: SubdomainFor(App)
 	Cert            CertChoice // optional explicit certificate (File+Key[+Chain]); found automatically otherwise
-	MigrateOnDeploy bool       // laravel only
+	MigrateOnDeploy bool       // laravel and symfony
+	Schedule        bool       // laravel only: cron entry running schedule:run every minute
 	Enable          bool       // a2ensite + configtest + reload
 }
 
@@ -136,7 +137,15 @@ func (p *Provisioner) Create(o CreateOptions) error {
 		dirRoot = docRoot
 	}
 
-	if err := appconf.Write(appDir, appconf.Conf{Type: o.Type, Migrate: o.MigrateOnDeploy && validate.IsPHP(o.Type)}); err != nil {
+	conf := appconf.Conf{
+		Type:     o.Type,
+		Migrate:  o.MigrateOnDeploy && validate.IsPHP(o.Type),
+		Schedule: o.Schedule && o.Type == validate.Laravel,
+	}
+	if err := appconf.Write(appDir, conf); err != nil {
+		return err
+	}
+	if err := p.syncSchedule(o.App, conf); err != nil {
 		return err
 	}
 

@@ -24,6 +24,7 @@ type AppInfo struct {
 	Domain       string   // ServerName of the vhost
 	Domains      []string // ServerName + ServerAlias
 	CertFile     string   // SSLCertificateFile of the vhost
+	Scheduled    bool     // the Laravel scheduler cron entry exists
 }
 
 // Apps lists every directory under AppsRoot, managed or not.
@@ -64,6 +65,7 @@ func (p *Provisioner) App(name string) (AppInfo, error) {
 	} else if ok {
 		info.Conf = &c
 	}
+	info.Scheduled = p.ScheduleInstalled(name)
 
 	if exists(p.Paths.VhostFile(name)) {
 		info.Vhost = p.Paths.VhostFile(name)
@@ -101,7 +103,8 @@ func (p *Provisioner) vhostEnabled(vhost string) bool {
 	return false
 }
 
-// Configure writes .deploy.conf for an existing managed app.
+// Configure writes .deploy.conf for an existing managed app and keeps the
+// Laravel scheduler cron entry in line with it.
 func (p *Provisioner) Configure(app string, c appconf.Conf) error {
 	if err := validate.AppName(app); err != nil {
 		return err
@@ -112,9 +115,12 @@ func (p *Provisioner) Configure(app string, c appconf.Conf) error {
 	if !validate.IsPHP(c.Type) {
 		c.Migrate = false
 	}
+	if c.Type != validate.Laravel {
+		c.Schedule = false
+	}
 	if err := appconf.Write(p.Paths.AppDir(app), c); err != nil {
 		return err
 	}
 	p.say("Gravado %s", appconf.Path(p.Paths.AppDir(app)))
-	return nil
+	return p.syncSchedule(app, c)
 }

@@ -144,15 +144,16 @@ func tuiApp(env *Env) tui.App {
 			}},
 			{Title: "Ajustes de um app", Items: []tui.Item{
 				{
-					Label: "Tipo e migrations", Root: true, Run: rooted(func() error { return iConfig(env) }),
+					Label: "Tipo, migrations e agendador", Root: true, Run: rooted(func() error { return iConfig(env) }),
 					Desc: func() string {
-						return "Grava o .deploy.conf dos apps já migrados que ainda não têm: o tipo e, no Laravel e no Symfony, " +
-							"se o deploy roda as migrations. Com ele, o deploy passa a rodar os hooks do tipo " +
+						return "Grava ou edita o .deploy.conf de um app: o tipo, se o deploy roda as migrations " +
+							"(Laravel e Symfony) e, no Laravel, o agendador (schedule:run a cada minuto, pelo cron). " +
+							"Num app já configurado, as perguntas vêm com os valores atuais.\n\n" +
+							"Sem .deploy.conf, o deploy só troca os arquivos; com ele, roda os hooks do tipo " +
 							"(storage:link e caches no Laravel, cache:clear no Symfony).\n\n" +
-							apps("Sem .deploy.conf:", needsConf, "Todos os apps migrados já têm .deploy.conf. "+
-								"Para mudar a config de um, use o comando abaixo.")
+							apps("Sem .deploy.conf:", needsConf, "Todos os apps no modelo de releases já têm .deploy.conf.")
 					},
-					CLI: "sudo deploy-tools app config <app> [--type t] [--migrate-on-deploy]",
+					CLI: "sudo deploy-tools app config <app> [--type t] [--migrate-on-deploy] [--schedule]",
 				},
 				{
 					Label: "Converter site antigo", Root: true, Run: rooted(func() error { return iMigrate(env) }),
@@ -334,6 +335,11 @@ func iCreate(env *Env) error {
 			Description(release.MigrateCommand(o.Type)+", antes de publicar a release.").
 			Affirmative("Sim").Negative("Não").Value(&o.MigrateOnDeploy))
 	}
+	if o.Type == validate.Laravel {
+		fields = append(fields, huh.NewConfirm().Title("Rodar o agendador do Laravel (schedule:run a cada minuto)?").
+			Description(scheduleDescription(env, o.App)).
+			Affirmative("Sim").Negative("Não").Value(&o.Schedule))
+	}
 	fields = append(fields, huh.NewConfirm().Title("Colocar o site no ar agora?").
 		Description("Ativa no Apache e recarrega. Escolha Não se o DNS ou o certificado ainda não estão prontos.").
 		Affirmative("Sim").Negative("Não").Value(&o.Enable))
@@ -357,6 +363,9 @@ func iCreate(env *Env) error {
 	}
 	if validate.IsPHP(o.Type) {
 		summary = append(summary, [2]string{"migrations no deploy", yesNo(o.MigrateOnDeploy)})
+	}
+	if o.Type == validate.Laravel {
+		summary = append(summary, [2]string{"agendador", yesNo(o.Schedule)})
 	}
 	env.UI.KV(summary...)
 	env.UI.Println()
@@ -446,13 +455,14 @@ func iRollback(env *Env) error {
 	return doRollback(env, app, id, false)
 }
 
+// iConfig writes the .deploy.conf of an app without one, or edits it.
 func iConfig(env *Env) error {
-	app, err := selectApp(env, "Configurar qual app?", needsConf,
-		"todos os apps migrados já têm .deploy.conf (para mudar um: sudo deploy-tools app config <app>)")
+	app, err := selectApp(env, "Configurar qual app?", func(a provision.AppInfo) bool { return a.Managed },
+		"nenhum app no modelo de releases (para um site antigo, use \"Converter site antigo\")")
 	if err != nil {
 		return err
 	}
-	return doConfig(env, app, "", nil)
+	return doConfig(env, app, configChange{AskType: true})
 }
 
 func iEnable(env *Env) error {

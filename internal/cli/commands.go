@@ -105,6 +105,7 @@ informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <a
 	createCmd.MarkFlagsMutuallyExclusive("domain", "base")
 	certFlags(createCmd, &create.Cert)
 	createCmd.Flags().BoolVar(&create.MigrateOnDeploy, "migrate-on-deploy", false, "laravel/symfony: roda as migrations a cada deploy")
+	createCmd.Flags().BoolVar(&create.Schedule, "schedule", false, "laravel: roda o agendador (schedule:run) a cada minuto, pelo cron")
 	createCmd.Flags().BoolVar(&create.Enable, "enable", false, "ativa o vhost e recarrega o Apache (com configtest)")
 	_ = createCmd.RegisterFlagCompletionFunc("type", completeTypes)
 
@@ -213,17 +214,26 @@ configtest antes e depois, reload só se passar e, em caso de falha, o site
 	}
 
 	var cfgType string
-	var cfgMigrate, cfgNoMigrate bool
+	var cfgMigrate, cfgNoMigrate, cfgSchedule, cfgNoSchedule bool
 	configCmd := &cobra.Command{
 		Use:   "config <app>",
-		Short: "Muda o tipo do app e se o deploy roda as migrations",
-		Long: `Apps criados antes do deploy-tools em Go não têm .deploy.conf e fazem
-deploy sem hooks (como sempre fizeram). Este comando grava a config;
-para Laravel, os próximos deploys passam a rodar storage:link,
-config:cache, route:cache e view:cache (e migrate --force, se ligado); para
-Symfony, cache:clear (e doctrine:migrations:migrate, se ligado).
-Sem --type, o tipo é detectado a partir de current/.`,
+		Short: "Muda o tipo do app, as migrations no deploy e o agendador do Laravel",
+		Long: `Grava (ou edita) o .deploy.conf do app. Apps criados antes do
+deploy-tools em Go não têm o arquivo e fazem deploy sem hooks (como sempre
+fizeram); com ele, para Laravel, os próximos deploys passam a rodar
+storage:link, config:cache, route:cache e view:cache (e migrate --force, se
+ligado); para Symfony, cache:clear (e doctrine:migrations:migrate, se ligado).
+
+No Laravel, --schedule cria /etc/cron.d/deploy-tools-<app>, que roda
+php artisan schedule:run a cada minuto como www-data, na release ativa;
+--no-schedule remove.
+
+Sem --type, o tipo atual é mantido (ou detectado a partir de current/, se
+ainda não houver). O que não for passado por flag é perguntado num terminal,
+com o valor atual já selecionado.`,
 		Example: `  sudo deploy-tools app config sistema --type laravel --migrate-on-deploy
+  sudo deploy-tools app config sistema --schedule
+  sudo deploy-tools app config sistema --no-migrate-on-deploy --no-schedule
   sudo deploy-tools app config docs`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeApps(env),
@@ -235,21 +245,19 @@ Sem --type, o tipo é detectado a partir de current/.`,
 			if err != nil {
 				return err
 			}
-			var migrate *bool
-			if cmd.Flags().Changed("migrate-on-deploy") {
-				migrate = &cfgMigrate
-			}
-			if cmd.Flags().Changed("no-migrate-on-deploy") {
-				f := !cfgNoMigrate
-				migrate = &f
-			}
-			return doConfig(env, a, cfgType, migrate)
+			ch := configChange{Type: cfgType}
+			ch.Migrate = boolFlags(cmd, "migrate-on-deploy", cfgMigrate, "no-migrate-on-deploy", cfgNoMigrate)
+			ch.Schedule = boolFlags(cmd, "schedule", cfgSchedule, "no-schedule", cfgNoSchedule)
+			return doConfig(env, a, ch)
 		},
 	}
 	configCmd.Flags().StringVarP(&cfgType, "type", "t", "", "laravel | symfony | react | angular | static (padrão: detectar)")
 	configCmd.Flags().BoolVar(&cfgMigrate, "migrate-on-deploy", false, "laravel/symfony: liga as migrations no deploy")
 	configCmd.Flags().BoolVar(&cfgNoMigrate, "no-migrate-on-deploy", false, "laravel/symfony: desliga as migrations no deploy")
 	configCmd.MarkFlagsMutuallyExclusive("migrate-on-deploy", "no-migrate-on-deploy")
+	configCmd.Flags().BoolVar(&cfgSchedule, "schedule", false, "laravel: liga o agendador (schedule:run a cada minuto, pelo cron)")
+	configCmd.Flags().BoolVar(&cfgNoSchedule, "no-schedule", false, "laravel: desliga o agendador")
+	configCmd.MarkFlagsMutuallyExclusive("schedule", "no-schedule")
 	_ = configCmd.RegisterFlagCompletionFunc("type", completeTypes)
 
 	app.AddGroup(
@@ -478,4 +486,17 @@ func order(parent *cobra.Command, names ...string) {
 			parent.AddCommand(c)
 		}
 	}
+}
+
+// boolFlags turns an --x/--no-x pair into a tri-state: nil when neither
+// was passed.
+func boolFlags(cmd *cobra.Command, on string, onVal bool, off string, offVal bool) *bool {
+	switch {
+	case cmd.Flags().Changed(on):
+		return &onVal
+	case cmd.Flags().Changed(off):
+		v := !offVal
+		return &v
+	}
+	return nil
 }

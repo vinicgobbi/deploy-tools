@@ -41,12 +41,14 @@ type Paths struct {
 	BinDir       string // /usr/local/bin
 	DeployHome   string // /home/deploy
 	SSHDir       string // /etc/ssh (host keys for DEPLOY_HOST_KEY)
+	CronDir      string // /etc/cron.d (Laravel scheduler of each app)
 
 	// DeployHost is how the CI reaches this server (secret DEPLOY_HOST);
 	// "" = the machine's hostname.
 	DeployHost string
 
 	DeployUser string
+	WebUser    string // runs the Laravel scheduler, like Apache (mod_php) runs the app
 	WebGroup   string
 
 	// Fixed certificate for every vhost. Empty (the default): search
@@ -80,7 +82,9 @@ func Default() Paths {
 		BinDir:       "/usr/local/bin",
 		DeployHome:   "/home/deploy",
 		SSHDir:       "/etc/ssh",
+		CronDir:      "/etc/cron.d",
 		DeployUser:   "deploy",
+		WebUser:      "www-data",
 		WebGroup:     "www-data",
 		CertDirs:     append([]string(nil), tlscert.DefaultDirs...),
 		ConfigFile:   File,
@@ -248,6 +252,7 @@ func ForRoot(root string) Paths {
 	p.BinDir = filepath.Join(root, p.BinDir)
 	p.DeployHome = filepath.Join(root, p.DeployHome)
 	p.SSHDir = filepath.Join(root, p.SSHDir)
+	p.CronDir = filepath.Join(root, p.CronDir)
 	p.ConfigFile = filepath.Join(root, File)
 	p.CertDirs = nil
 	for _, d := range tlscert.DefaultDirs {
@@ -261,6 +266,10 @@ func (p Paths) ReleasesDir(app string) string { return filepath.Join(p.AppsRoot,
 func (p Paths) SharedDir(app string) string   { return filepath.Join(p.AppsRoot, app, "shared") }
 func (p Paths) CurrentLink(app string) string { return filepath.Join(p.AppsRoot, app, "current") }
 func (p Paths) VhostFile(app string) string   { return filepath.Join(p.SitesAvail, app+".conf") }
-func (p Paths) AuthorizedKeys() string        { return filepath.Join(p.DeployHome, ".ssh", "authorized_keys") }
-func (p Paths) BinaryPath() string            { return filepath.Join(p.BinDir, "deploy-tools") }
-func (p Paths) WrapperPath() string           { return filepath.Join(p.BinDir, "deploy-ci") }
+
+// CronFile is the app's Laravel scheduler entry. cron ignores files in
+// /etc/cron.d whose names have a dot; app names never do.
+func (p Paths) CronFile(app string) string { return filepath.Join(p.CronDir, "deploy-tools-"+app) }
+func (p Paths) AuthorizedKeys() string     { return filepath.Join(p.DeployHome, ".ssh", "authorized_keys") }
+func (p Paths) BinaryPath() string         { return filepath.Join(p.BinDir, "deploy-tools") }
+func (p Paths) WrapperPath() string        { return filepath.Join(p.BinDir, "deploy-ci") }
