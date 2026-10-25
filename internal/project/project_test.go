@@ -107,6 +107,30 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+func TestDetectPHPVersionFollowsComposerLock(t *testing.T) {
+	dir := fixture(t, "laravel")
+	write(t, dir, "composer.json", `{"require":{"php":"^8.3"}}`)
+	// "^7.4 || ^8.0" accepts 7.4; "*" has no lower bound; symfony/* needs 8.4.
+	write(t, dir, "composer.lock", `{
+		"packages": [
+			{"name": "a/a", "require": {"php": "^7.4 || ^8.0"}},
+			{"name": "symfony/console", "require": {"php": ">=8.4.1"}},
+			{"name": "b/b", "require": {"php": "*"}},
+			{"name": "c/c", "require": {"ext-json": "*"}}
+		],
+		"packages-dev": [{"name": "d/d", "require": {"php": "^8.2"}}]
+	}`)
+	if v := Detect(dir).PHPVersion; v != "8.4" {
+		t.Errorf("PHPVersion = %s, quer 8.4 (exigido pelo composer.lock)", v)
+	}
+
+	// The lock never lowers what composer.json asks for.
+	write(t, dir, "composer.json", `{"require":{"php":"^8.5"}}`)
+	if v := Detect(dir).PHPVersion; v != "8.5" {
+		t.Errorf("PHPVersion = %s, quer 8.5 (do composer.json)", v)
+	}
+}
+
 func golden(t *testing.T, name, got string) {
 	t.Helper()
 	path := filepath.Join("testdata", name)

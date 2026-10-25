@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -91,7 +92,7 @@ func Detect(dir string) Options {
 	case exists(dir, "artisan") && exists(dir, "composer.json"):
 		o.Type = Laravel
 		comp := readComposer(dir)
-		o.PHPVersion = phpVersion(comp.Require["php"])
+		o.PHPVersion = projectPHPVersion(dir, comp)
 		_, o.Pint = comp.RequireDev["laravel/pint"]
 		o.ViteAssets = pkg.Scripts["build"] != ""
 		for _, d := range []string{"app", "bootstrap", "config", "database", "routes", "tests"} {
@@ -102,7 +103,7 @@ func Detect(dir string) Options {
 	case exists(dir, "bin/console") && exists(dir, "composer.json") && hasKey(readComposer(dir).Require, "symfony/framework-bundle"):
 		o.Type = Symfony
 		comp := readComposer(dir)
-		o.PHPVersion = phpVersion(comp.Require["php"])
+		o.PHPVersion = projectPHPVersion(dir, comp)
 		o.AssetMapper = hasKey(comp.Require, "symfony/asset-mapper")
 		o.ViteAssets = pkg.Scripts["build"] != ""
 		for _, d := range []string{"src", "config", "migrations", "public", "tests"} {
@@ -166,10 +167,89 @@ func readComposer(dir string) composerJSON {
 
 // phpVersion turns a constraint like "^8.4.1" or ">=8.2" into "8.4"/"8.2".
 func phpVersion(constraint string) string {
-	if m := regexp.MustCompile(`(\d+)\.(\d+)`).FindStringSubmatch(constraint); m != nil {
-		return m[1] + "." + m[2]
+	if v := lowerBound(constraint); v != "" {
+		return v
 	}
 	return "8.4"
+}
+
+var majorMinor = regexp.MustCompile(`(\d+)\.(\d+)`)
+
+// lowerBound is the first major.minor of a constraint, "" without one.
+func lowerBound(constraint string) string {
+	if m := majorMinor.FindStringSubmatch(constraint); m != nil {
+		return m[1] + "." + m[2]
+	}
+	return ""
+}
+
+// projectPHPVersion is the PHP the workflow installs: the one composer.json
+// asks for, raised to what the locked packages need. A project may say
+// "^8.3" while its composer.lock was resolved on a newer PHP, with packages
+// that require 8.4: composer install would refuse the lock on 8.3.
+func projectPHPVersion(dir string, comp composerJSON) string {
+	v := phpVersion(comp.Require["php"])
+	if lock := lockPHPVersion(dir); lock != "" && versionLess(v, lock) {
+		v = lock
+	}
+	return v
+}
+
+// lockPHPVersion is the lowest major.minor that every package of
+// composer.lock accepts (dev packages included: the validate job installs
+// them), or "" without a lock.
+func lockPHPVersion(dir string) string {
+	type pkg struct {
+		Require map[string]string `json:"require"`
+	}
+	var lock struct {
+		Packages    []pkg `json:"packages"`
+		PackagesDev []pkg `json:"packages-dev"`
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "composer.lock"))
+	if err != nil || json.Unmarshal(b, &lock) != nil {
+		return ""
+	}
+	need := ""
+	for _, p := range append(lock.Packages, lock.PackagesDev...) {
+		if v := minPHP(p.Require["php"]); v != "" && (need == "" || versionLess(need, v)) {
+			need = v
+		}
+	}
+	return need
+}
+
+// minPHP is the lowest major.minor a constraint accepts: the smallest lower
+// bound among its alternatives ("^7.4 || ^8.0" -> "7.4"). "" when some
+// alternative has no lower bound ("*").
+func minPHP(constraint string) string {
+	if strings.TrimSpace(constraint) == "" {
+		return ""
+	}
+	low := ""
+	for _, alt := range regexp.MustCompile(`\|\|?`).Split(constraint, -1) {
+		v := lowerBound(alt)
+		if v == "" {
+			return ""
+		}
+		if low == "" || versionLess(v, low) {
+			low = v
+		}
+	}
+	return low
+}
+
+// versionLess compares two major.minor versions.
+func versionLess(a, b string) bool {
+	parse := func(v string) (int, int) {
+		maj, minor, _ := strings.Cut(v, ".")
+		x, _ := strconv.Atoi(maj)
+		y, _ := strconv.Atoi(minor)
+		return x, y
+	}
+	am, an := parse(a)
+	bm, bn := parse(b)
+	return am < bm || (am == bm && an < bn)
 }
 
 func hasKey(m map[string]string, k string) bool { _, ok := m[k]; return ok }

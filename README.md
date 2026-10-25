@@ -608,7 +608,10 @@ O `init` detecta:
   no `pyproject.toml`.
 - **Node:** pnpm ou npm, lint, os `VITE_*` do `.env.example` e o registry npm
   do GitHub Packages (`npm.pkg.github.com` no `.npmrc`).
-- **PHP:** versão (do `composer.json`) e Pint.
+- **PHP:** versão e Pint. A versão é a do `composer.json`, elevada ao que
+  os pacotes do `composer.lock` exigem: um projeto com `"php": "^8.3"`
+  cujo lock tem pacotes que pedem 8.4 ganha PHP 8.4 no workflow (senão o
+  `composer install` recusaria o lock).
 
 Num projeto que já faz deploy, o `APP_NAME` existente é mantido. O workflow
 gerado é dividido em jobs, que aparecem como etapas no GitHub Actions:
