@@ -105,14 +105,7 @@ func (p *Provisioner) Create(o CreateOptions) error {
 		// Standard Laravel writable/persistent paths, kept outside releases/
 		// and symlinked into every new release.
 		sh := p.Paths.SharedDir(o.App)
-		if err := p.mkdirShared(
-			filepath.Join(sh, "storage"),
-			filepath.Join(sh, "storage/app/public"),
-			filepath.Join(sh, "storage/framework/cache"),
-			filepath.Join(sh, "storage/framework/sessions"),
-			filepath.Join(sh, "storage/framework/views"),
-			filepath.Join(sh, "storage/logs"),
-		); err != nil {
+		if err := p.mkdirShared(laravelStorageDirs(sh)...); err != nil {
 			return err
 		}
 		if err := p.emptyEnv(filepath.Join(sh, ".env")); err != nil {
@@ -269,4 +262,22 @@ func (p *Provisioner) Disable(app string) error {
 	}
 	p.say("Site %s (%s) desativado e Apache recarregado.", name, file)
 	return nil
+}
+
+// laravelStorageDirs is the standard Laravel storage tree under shared/.
+// Every level is listed, parents included: mkdirShared only fixes the mode
+// and owner of the directories it is given, and a parent left as created
+// by MkdirAll (root, 0755) would keep the web user from creating anything
+// in it (storage/app/private, for example).
+func laravelStorageDirs(shared string) []string {
+	var dirs []string
+	for _, d := range []string{
+		"storage",
+		"storage/app", "storage/app/public", "storage/app/private",
+		"storage/framework", "storage/framework/cache", "storage/framework/sessions", "storage/framework/views",
+		"storage/logs",
+	} {
+		dirs = append(dirs, filepath.Join(shared, d))
+	}
+	return dirs
 }

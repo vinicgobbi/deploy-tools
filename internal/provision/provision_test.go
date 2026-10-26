@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -470,5 +471,57 @@ func TestCreateAngularIsSPA(t *testing.T) {
 	vhost := read(t, p.Paths.VhostFile("painel"))
 	if !strings.Contains(vhost, "RewriteRule ^ index.html [L]") || strings.Contains(vhost, "/public") {
 		t.Fatalf("vhost:\n%s", vhost)
+	}
+}
+
+// recOwner records every chown, so tests can check ownership without root.
+type recOwner struct{ paths []string }
+
+func (r *recOwner) Chown(path, _, _ string, _ bool) error {
+	r.paths = append(r.paths, path)
+	return nil
+}
+
+func TestCreateLaravelSharesEveryStorageLevel(t *testing.T) {
+	p, _ := newP(t)
+	owner := &recOwner{}
+	p.Owner = owner
+	if err := p.Create(CreateOptions{App: "app", Type: "laravel"}); err != nil {
+		t.Fatal(err)
+	}
+	sh := p.Paths.SharedDir("app")
+	for _, d := range []string{"storage/app", "storage/app/private", "storage/framework", "storage/framework/views"} {
+		path := filepath.Join(sh, d)
+		fi, err := os.Stat(path)
+		if err != nil || fi.Mode()&os.ModeSetgid == 0 || fi.Mode().Perm() != 0o775 {
+			t.Errorf("%s: %v %v (quer 2775)", d, fi.Mode(), err)
+		}
+		if !slices.Contains(owner.paths, path) {
+			t.Errorf("%s sem chown deploy:www-data", d)
+		}
+	}
+}
+
+func TestConfigureRepairsLaravelStorage(t *testing.T) {
+	p, _ := newP(t)
+	if err := p.Create(CreateOptions{App: "app", Type: "laravel"}); err != nil {
+		t.Fatal(err)
+	}
+	// As left by versions before v0.16: a parent created by MkdirAll.
+	broken := filepath.Join(p.Paths.SharedDir("app"), "storage/app")
+	_ = os.RemoveAll(filepath.Join(broken, "private"))
+	_ = os.Chmod(broken, 0o755)
+
+	owner := &recOwner{}
+	p.Owner = owner
+	if err := p.Configure("app", appconf.Conf{Type: "laravel"}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(broken)
+	if err != nil || fi.Mode()&os.ModeSetgid == 0 || fi.Mode().Perm() != 0o775 || !slices.Contains(owner.paths, broken) {
+		t.Fatalf("storage/app não foi reparado: %v %v", fi.Mode(), err)
+	}
+	if _, err := os.Stat(filepath.Join(broken, "private")); err != nil {
+		t.Fatalf("storage/app/private: %v", err)
 	}
 }

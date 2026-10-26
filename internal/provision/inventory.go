@@ -122,5 +122,20 @@ func (p *Provisioner) Configure(app string, c appconf.Conf) error {
 		return err
 	}
 	p.say("Gravado %s", appconf.Path(p.Paths.AppDir(app)))
+	if err := p.repairLaravelStorage(app, c); err != nil {
+		return err
+	}
 	return p.syncSchedule(app, c)
+}
+
+// repairLaravelStorage gives every level of shared/storage the shared
+// mode and owner. Apps created before v0.16 had storage/app and
+// storage/framework left as root:root 0755, so the site could not create
+// storage/app/private. Only directories are touched; files are not.
+func (p *Provisioner) repairLaravelStorage(app string, c appconf.Conf) error {
+	sh := p.Paths.SharedDir(app)
+	if c.Type != validate.Laravel || !exists(filepath.Join(sh, "storage")) {
+		return nil
+	}
+	return p.mkdirShared(laravelStorageDirs(sh)...)
 }
