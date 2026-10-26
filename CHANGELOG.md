@@ -1,3 +1,9 @@
+## v0.16.1 (2026-10-26)
+
+### Fix
+
+- **app**: permissões de todos os níveis do storage do Laravel
+
 ## v0.16.0 (2026-10-25)
 
 ### Feat
