@@ -43,7 +43,7 @@ São dois binários Go:
 
 Requisitos do servidor: Debian ou Ubuntu com Apache 2.4 (`a2ensite`,
 `apache2ctl`, `sites-available/`), `mod_ssl` e, para Laravel e Symfony, PHP
-via mod_php.
+via mod_php. Para Angular com SSR, também Node.js, systemd e sudo.
 
 ## Setup de um servidor
 
@@ -309,6 +309,11 @@ publicado já seria executado pelo Apache de qualquer forma, mas vale ter isso
 em mente. O `.deploy.conf` pertence ao root, então a CI não consegue ligar as
 migrations sozinha.
 
+Apps Angular com SSR acrescentam uma permissão ao usuário `deploy`:
+reiniciar o serviço do próprio app com `sudo`, e nada além disso (veja
+[Angular SSR](#angular-ssr)). O Node roda como `www-data`, não como
+`deploy`, então o código publicado não consegue alterar as releases.
+
 Para auditar as chaves: `sudo deploy-tools key list`. Esse comando destaca
 qualquer chave sem `command=`.
 
@@ -316,7 +321,7 @@ qualquer chave sem `command=`.
 
 ```
 deploy-tools                                    # interface de tela cheia
-deploy-tools app create <app> --type laravel|symfony|react|angular|static [-d dominio]... | [--base b [--sub s]] [--cert c --key k [--chain b]] [--migrate-on-deploy] [--schedule] [--enable]
+deploy-tools app create <app> --type laravel|symfony|react|angular|static [-d dominio]... | [--base b [--sub s]] [--cert c --key k [--chain b]] [--migrate-on-deploy] [--schedule] [--ssr [--port p]] [--enable]
 deploy-tools app migrate <app> --type ... [--vhost arquivo] [--yes]
 deploy-tools app config <app> [--type t] [--migrate-on-deploy | --no-migrate-on-deploy] [--schedule | --no-schedule]
 deploy-tools app domain list|add|remove <app> [dominio]...
@@ -355,6 +360,7 @@ confirmação.
 sudo deploy-tools app create minha-api --type laravel -d api.example.com
 sudo deploy-tools app create meu-front --type react -d app.example.com,www.app.example.com --enable
 sudo deploy-tools app create docs --type static --base vinicgobbi.dev.br   # docs.vinicgobbi.dev.br
+sudo deploy-tools app create loja --type angular --ssr                     # Angular com SSR
 ```
 
 O comando cria:
@@ -393,6 +399,66 @@ atual do Apache já estiver com erro.
 | Rotas | `.htaccess` do próprio Laravel | `FallbackResource /index.php` no vhost (não depende do `apache-pack`) | `RewriteRule` de SPA no vhost (o roteador do front funciona em refresh direto) | nenhuma regra especial |
 | `shared/` | `.env` (vazio, você preenche) + `storage/` | `.env.local` (criado com `APP_ENV=prod`) + `var/log` | não usa | não usa |
 | Hooks no deploy | `storage:link`, `config:cache`, `route:cache`, `view:cache` (+ `migrate --force` opcional) | `cache:clear --env=prod` (+ `doctrine:migrations:migrate` opcional) | nenhum | nenhum |
+
+Angular com SSR muda as colunas de React/Angular: veja
+[Angular SSR](#angular-ssr).
+
+## Angular SSR
+
+Para projetos Angular 17+ com server-side rendering (builder `application`
+com `ssr`/`server` no `angular.json`), crie o app com `--ssr`:
+
+```bash
+sudo deploy-tools app create loja --type angular --ssr            # porta: a próxima livre a partir da 4000
+sudo deploy-tools app create loja --type angular --ssr --port 4100
+```
+
+Na TUI, o "Criar app" pergunta pelo SSR quando o tipo é Angular. O
+`deploy-dev init` detecta o SSR e publica `dist/<projeto>` inteiro
+(`browser/` e `server/`), e não só o `browser/`.
+
+O que muda em relação ao Angular SPA:
+
+| | Angular SSR |
+|---|---|
+| `.deploy.conf` | `TYPE=angular`, `SSR=yes`, `PORT=<porta>` |
+| Build esperado no tarball | `dist/<projeto>`: `browser/` e `server/server.mjs` (o build já embute as dependências; nada de `npm install` no servidor) |
+| `DocumentRoot` | `current/browser` |
+| Rotas | arquivos que existem em `browser/` saem direto do Apache; o resto vai por proxy para `http://127.0.0.1:<porta>` (`mod_proxy`, `mod_proxy_http` e `mod_headers` são ativados automaticamente) |
+| Processo | `/etc/systemd/system/deploy-tools-<app>.service`: `node current/server/server.mjs` como `www-data`, com `PORT` fixa e `NODE_ENV=production` |
+| `shared/` | `.env` (vazio): variáveis de ambiente do servidor Node, lidas pelo serviço |
+| No deploy | troca o `current`, reinicia o serviço e espera a porta responder (até 30s) |
+
+**Reinício no deploy.** O `deploy-ci` roda como `deploy`, que não pode
+mexer no systemd. Por isso, o `app create --ssr` grava
+`/etc/sudoers.d/deploy-tools-<app>` (do root, modo 440, validado com
+`visudo -c` antes de entrar no lugar), que permite **só** isto:
+
+```
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart deploy-tools-<app>.service
+```
+
+Se o Node da release nova não abrir a porta, o `current` volta para a
+release anterior, o serviço é reiniciado nela e a release nova é apagada:
+o site continua como estava. Um pacote sem `server/server.mjs` (por
+exemplo, só o `browser/`) é recusado antes da troca. O `release rollback`
+também reinicia o serviço.
+
+Cuidados:
+
+- **Node.js no servidor**, instalado no sistema (NodeSource ou pacote da
+  distribuição), na versão major que o projeto usa. Um Node do `nvm` numa
+  pasta pessoal não serve: o `www-data` não o acessa.
+- **A porta fica exposta** se o firewall deixar: o `server.ts` padrão do
+  Angular escuta em todas as interfaces. Bloqueie a faixa de portas do SSR
+  no firewall, ou faça o `server.ts` escutar só em `127.0.0.1`.
+- **O reinício derruba o site por cerca de 1s** a cada deploy.
+- `PORT` vem do `.deploy.conf`: um `PORT` no `shared/.env` não muda a porta.
+- O SSR só é ligado no `app create`. O `app config` de um app SSR recria o
+  serviço e a regra do sudo quando faltam, mas não troca o tipo. O
+  `app migrate` não converte apps com SSR.
+- `app status` mostra a porta e o estado do serviço. Logs do Node:
+  `journalctl -u deploy-tools-<app>.service`.
 
 ## Migrar um app que já está em produção (`app migrate`)
 
@@ -634,7 +700,9 @@ O `init` detecta:
   `angular.json` indica Angular; Vite/React indica React; e `mkdocs.yml`
   indica estático com mkdocs. Qualquer outro caso vira uma pasta pronta.
 - **Angular:** a pasta publicada vem do `angular.json` (o `outputPath` do
-  projeto, mais `browser/` no builder `application` do Angular 17+).
+  projeto, mais `browser/` no builder `application` do Angular 17+). Com
+  SSR (`ssr`/`server` nas opções do build, e `outputMode` diferente de
+  `static`), publica o `outputPath` inteiro, com `browser/` e `server/`.
 - **Laravel:** build dos assets do Vite (`public/build`) quando o
   `package.json` tem script `build`, com pnpm ou npm conforme o lockfile.
   Em "Ajustar antes de gerar" dá para desligar (APIs sem front) ou trocar
