@@ -15,9 +15,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -42,6 +44,10 @@ type Manager struct {
 	// LockTimeout bounds the wait for another deploy of the same app;
 	// zero means DefaultLockTimeout.
 	LockTimeout time.Duration
+	// SSRReady waits for the Node server of an Angular SSR app to accept
+	// connections on port; nil means a TCP check on 127.0.0.1 for up to
+	// SSRStartTimeout.
+	SSRReady func(port int) error
 }
 
 type Release struct {
@@ -107,6 +113,10 @@ func (m *Manager) Deploy(app, id string, tarball io.Reader) (err error) {
 	if err != nil {
 		return err
 	}
+	if conf.SSR && !appconf.DetectSSR(target) {
+		return fmt.Errorf("%s is an Angular SSR app, but the release has no browser/ and %s (package dist/<project>, not dist/<project>/browser)",
+			app, appconf.SSRServer)
+	}
 	if err := LinkShared(m.Paths.AppDir(app), target, conf.Type); err != nil {
 		return fmt.Errorf("linking shared/: %w", err)
 	}
@@ -116,8 +126,17 @@ func (m *Manager) Deploy(app, id string, tarball io.Reader) (err error) {
 		}
 	}
 
+	previous := m.currentTarget(app)
 	if err := SwapCurrent(m.Paths.AppDir(app), target); err != nil {
 		return err
+	}
+	if conf.SSR {
+		if err := m.restartSSR(app, conf.Port); err != nil {
+			// The new release stays out: back to the previous one (and its
+			// server), and the deferred cleanup removes the new release.
+			m.restore(app, previous, conf.Port)
+			return err
+		}
 	}
 	swapped = true
 
@@ -229,11 +248,94 @@ func (m *Manager) Rollback(app, id string) error {
 	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
 		return fmt.Errorf("%w: %s", ErrReleaseNotFound, id)
 	}
+	conf, _, err := appconf.Read(m.Paths.AppDir(app))
+	if err != nil {
+		return err
+	}
+	if conf.SSR && !appconf.DetectSSR(target) {
+		return fmt.Errorf("release %s has no %s; it cannot run as Angular SSR", id, appconf.SSRServer)
+	}
+	previous := m.currentTarget(app)
 	if err := SwapCurrent(m.Paths.AppDir(app), target); err != nil {
 		return err
 	}
+	if conf.SSR {
+		if err := m.restartSSR(app, conf.Port); err != nil {
+			m.restore(app, previous, conf.Port)
+			return err
+		}
+	}
 	fmt.Fprintf(m.Out, "rolled back %s -> %s\n", app, id)
 	return nil
+}
+
+// SSRStartTimeout is how long a restarted SSR server has to accept
+// connections before the deploy (or rollback) is undone.
+const SSRStartTimeout = 30 * time.Second
+
+// restartSSR restarts the app's Node service and waits for its port. The
+// deploy user may run exactly this through sudo (the rule written by
+// "deploy-tools app create --ssr"); -n makes a missing rule fail at once
+// instead of asking for a password.
+func (m *Manager) restartSSR(app string, port int) error {
+	svc := config.ServiceName(app)
+	fmt.Fprintf(m.Err, "restarting %s\n", svc)
+	if err := m.Runner.Run(run.Cmd{
+		Name: "sudo", Args: []string{"-n", m.Paths.Systemctl, "restart", svc},
+		Stdout: m.Err, Stderr: m.Err,
+	}); err != nil {
+		return fmt.Errorf("restarting %s: %w", svc, err)
+	}
+	ready := m.SSRReady
+	if ready == nil {
+		ready = waitPort
+	}
+	if err := ready(port); err != nil {
+		return fmt.Errorf("%s did not start (see: journalctl -u %s): %w", svc, svc, err)
+	}
+	return nil
+}
+
+// restore points current back at previous after a failed SSR restart and
+// restarts the server there. With no previous release (first deploy),
+// current is removed.
+func (m *Manager) restore(app, previous string, port int) {
+	if previous == "" {
+		_ = os.Remove(m.Paths.CurrentLink(app))
+		return
+	}
+	if err := SwapCurrent(m.Paths.AppDir(app), previous); err != nil {
+		fmt.Fprintf(m.Err, "could not restore current -> %s: %s\n", previous, err)
+		return
+	}
+	fmt.Fprintf(m.Err, "restored current -> %s\n", filepath.Base(previous))
+	if err := m.restartSSR(app, port); err != nil {
+		fmt.Fprintf(m.Err, "the previous release did not start either: %s\n", err)
+	}
+}
+
+// currentTarget is the release dir current points to, or "".
+func (m *Manager) currentTarget(app string) string {
+	if id := m.CurrentID(app); id != "" {
+		return filepath.Join(m.Paths.ReleasesDir(app), id)
+	}
+	return ""
+}
+
+func waitPort(port int) error {
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	deadline := time.Now().Add(SSRStartTimeout)
+	for {
+		c, err := net.DialTimeout("tcp", addr, time.Second)
+		if err == nil {
+			c.Close()
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("nothing listening on %s after %s", addr, SSRStartTimeout)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // List returns releases newest first. Ids start with a timestamp, so name
