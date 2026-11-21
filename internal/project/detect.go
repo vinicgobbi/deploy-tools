@@ -42,6 +42,9 @@ type Options struct {
 	ViteVars        []string // repository variables required at build time
 	PrivateRegistry bool     // .npmrc points at GitHub Packages (npm.pkg.github.com)
 
+	// Angular
+	SSR bool // server-side rendering: the release is dist/<project> (browser/ + server/)
+
 	// Static
 	MkDocs        bool
 	Requirements  bool // requirements.txt present (mkdocs)
@@ -118,7 +121,7 @@ func Detect(dir string) Options {
 		o.OutputDir = "site"
 	case exists(dir, "angular.json"):
 		o.Type = Angular
-		o.OutputDir = angularOutputDir(dir)
+		o.OutputDir, o.SSR = angularOutput(dir)
 	case pkg.Scripts["build"] != "" && (hasPrefixFile(dir, "vite.config.") || pkg.Deps["react"] != ""):
 		o.Type = React
 	default:
@@ -258,6 +261,31 @@ func hasKey(m map[string]string, k string) bool { _, ok := m[k]; return ok }
 // first (or default) project's outputPath, plus "browser" for the
 // application builder (Angular 17+), which nests them there.
 func angularOutputDir(dir string) string {
+	b := readAngularBuild(dir)
+	if !b.modern || b.browser == "" {
+		return b.base
+	}
+	return b.base + "/" + b.browser
+}
+
+// angularOutput is the directory that becomes the release and whether the
+// project uses server-side rendering. An SSR build ships the whole
+// outputPath (browser/ and server/, run by the Node service on the
+// server); otherwise only the browser files.
+func angularOutput(dir string) (string, bool) {
+	if b := readAngularBuild(dir); b.ssr {
+		return b.base, true
+	}
+	return angularOutputDir(dir), false
+}
+
+type angularBuild struct {
+	base, browser string
+	modern        bool // application builder (Angular 17+)
+	ssr           bool // ssr/server set and outputMode not "static"
+}
+
+func readAngularBuild(dir string) angularBuild {
 	var ng struct {
 		DefaultProject string `json:"defaultProject"`
 		Projects       map[string]struct {
@@ -266,13 +294,17 @@ func angularOutputDir(dir string) string {
 				Builder string `json:"builder"`
 				Options struct {
 					OutputPath json.RawMessage `json:"outputPath"`
+					SSR        json.RawMessage `json:"ssr"`
+					Server     string          `json:"server"`
+					OutputMode string          `json:"outputMode"`
 				} `json:"options"`
 			} `json:"architect"`
 		} `json:"projects"`
 	}
+	out := angularBuild{base: "dist", browser: "browser"}
 	b, err := os.ReadFile(filepath.Join(dir, "angular.json"))
 	if err != nil || json.Unmarshal(b, &ng) != nil || len(ng.Projects) == 0 {
-		return "dist"
+		return out
 	}
 	name := ng.DefaultProject
 	if _, ok := ng.Projects[name]; !ok {
@@ -283,14 +315,14 @@ func angularOutputDir(dir string) string {
 			}
 		}
 		if len(names) == 0 {
-			return "dist"
+			return out
 		}
 		sort.Strings(names)
 		name = names[0]
 	}
 	build := ng.Projects[name].Architect["build"]
-	modern := strings.HasSuffix(build.Builder, ":application")
-	base, browser := "dist/"+name, "browser"
+	out.modern = strings.HasSuffix(build.Builder, ":application")
+	out.base = "dist/" + name
 	var s string
 	var obj struct {
 		Base    string  `json:"base"`
@@ -298,18 +330,19 @@ func angularOutputDir(dir string) string {
 	}
 	switch {
 	case json.Unmarshal(build.Options.OutputPath, &s) == nil && s != "":
-		base = s
+		out.base = s
 	case json.Unmarshal(build.Options.OutputPath, &obj) == nil && obj.Base != "":
-		base = obj.Base
+		out.base = obj.Base
 		if obj.Browser != nil {
-			browser = *obj.Browser
+			out.browser = *obj.Browser
 		}
 	}
-	base = strings.TrimSuffix(strings.TrimPrefix(base, "./"), "/")
-	if !modern || browser == "" {
-		return base
-	}
-	return base + "/" + browser
+	out.base = strings.TrimSuffix(strings.TrimPrefix(out.base, "./"), "/")
+	// "ssr": true or {"entry": "src/server.ts"}; "server": the server main
+	// (Angular 17/18). outputMode "static" only prerenders: no server.
+	ssr := len(build.Options.SSR) > 0 && string(build.Options.SSR) != "false" && string(build.Options.SSR) != "null"
+	out.ssr = out.modern && out.browser == "browser" && (ssr || build.Options.Server != "") && build.Options.OutputMode != "static"
+	return out
 }
 
 func hasPrefixFile(dir, prefix string) bool {

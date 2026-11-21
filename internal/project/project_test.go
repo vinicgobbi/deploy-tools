@@ -317,6 +317,42 @@ func TestAngularOutputDir(t *testing.T) {
 	}
 }
 
+func TestAngularSSR(t *testing.T) {
+	for name, c := range map[string]struct {
+		json, want string
+		ssr        bool
+	}{
+		"v19 server mode": {`{"projects":{"loja":{"architect":{"build":{"builder":"@angular/build:application","options":{"outputPath":"dist/loja","server":"src/main.server.ts","ssr":{"entry":"src/server.ts"},"outputMode":"server"}}}}}}`, "dist/loja", true},
+		"v17 ssr":         {`{"projects":{"loja":{"architect":{"build":{"builder":"@angular-devkit/build-angular:application","options":{"server":"src/main.server.ts","ssr":{"entry":"server.ts"},"prerender":true}}}}}}`, "dist/loja", true},
+		"only prerender":  {`{"projects":{"loja":{"architect":{"build":{"builder":"@angular/build:application","options":{"server":"src/main.server.ts","ssr":true,"outputMode":"static"}}}}}}`, "dist/loja/browser", false},
+		"ssr false":       {`{"projects":{"loja":{"architect":{"build":{"builder":"@angular/build:application","options":{"ssr":false}}}}}}`, "dist/loja/browser", false},
+		"legacy builder":  {`{"projects":{"loja":{"architect":{"build":{"builder":"@angular-devkit/build-angular:browser","options":{"outputPath":"dist/loja","ssr":true}}}}}}`, "dist/loja", false},
+	} {
+		dir := t.TempDir()
+		write(t, dir, "angular.json", c.json)
+		if got, ssr := angularOutput(dir); got != c.want || ssr != c.ssr {
+			t.Errorf("%s: %q ssr=%v, want %q ssr=%v", name, got, ssr, c.want, c.ssr)
+		}
+	}
+}
+
+func TestAngularSSRWorkflowShipsWholeOutput(t *testing.T) {
+	dir := fixture(t, "angular")
+	write(t, dir, "angular.json", `{"projects":{"painel":{"architect":{"build":{"builder":"@angular/build:application","options":{"outputPath":"dist/painel","ssr":{"entry":"src/server.ts"},"outputMode":"server"}}}}}}`)
+	o := Detect(dir)
+	if !o.SSR || o.OutputDir != "dist/painel" {
+		t.Fatalf("detect: %+v", o)
+	}
+	o.ActionRef, o.ActionVersion = strings.Repeat("a", 40), "v0.0.0"
+	got, err := Render(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `tar -czf "$RUNNER_TEMP/release.tar.gz" -C dist/painel .`) {
+		t.Fatalf("workflow:\n%s", got)
+	}
+}
+
 func TestRemoteHostAndMatchForge(t *testing.T) {
 	for remote, want := range map[string]string{
 		"git@github.com:vinicgobbi/site.git":           "github.com",

@@ -288,7 +288,7 @@ func describe(o project.Options) [][2]string {
 			[2]string{"Node", o.NodeVersion + " · " + o.PackageManager},
 			[2]string{"lint antes do build", yesNo(o.Lint)})
 		if o.Type == project.Angular {
-			pairs = append(pairs, [2]string{"pasta publicada", o.OutputDir})
+			pairs = append(pairs, [2]string{"SSR", yesNo(o.SSR)}, [2]string{"pasta publicada", o.OutputDir})
 		}
 	case project.Static:
 		if o.MkDocs {
@@ -305,6 +305,13 @@ func describe(o project.Options) [][2]string {
 		pairs = append(pairs, [2]string{"variáveis do build", strings.Join(o.ViteVars, ", ")})
 	}
 	return pairs
+}
+
+func ssrFlag(o project.Options) string {
+	if o.SSR {
+		return " --ssr"
+	}
+	return ""
 }
 
 func yesNo(b bool) string { return map[bool]string{true: "sim", false: "não"}[b] }
@@ -394,6 +401,19 @@ func askOptions(env *Env, o *project.Options) error {
 	switch o.Type {
 	case project.React, project.Angular:
 		if o.Type == project.Angular {
+			ssr := o.SSR
+			if err := env.UI.Run(huh.NewGroup(huh.NewConfirm().Title("O projeto usa SSR (server-side rendering)?").
+				Description("Sim: publica a saída inteira do ng build (browser/ e server/); o servidor roda o Node.").
+				Affirmative("Sim").Negative("Não").Value(&o.SSR))); err != nil {
+				return err
+			}
+			// The SSR release is the outputPath itself; the SPA one, its browser/.
+			switch {
+			case o.SSR && !ssr:
+				o.OutputDir = strings.TrimSuffix(o.OutputDir, "/browser")
+			case !o.SSR && ssr:
+				o.OutputDir += "/browser"
+			}
 			fields = append(fields, huh.NewInput().Title("Pasta publicada (saída do ng build)").Value(&o.OutputDir))
 		}
 		fields = append(fields, nodeFields(o)...)
@@ -438,7 +458,10 @@ func nodeFields(o *project.Options) []huh.Field {
 
 func nextSteps(dir string, o project.Options) []string {
 	steps := []string{
-		"O app precisa existir no servidor: `sudo deploy-tools app create " + o.App + " --type " + o.Type + " --domain <domínio>`.",
+		"O app precisa existir no servidor: `sudo deploy-tools app create " + o.App + " --type " + o.Type + ssrFlag(o) + " --domain <domínio>`.",
+	}
+	if o.SSR {
+		steps = append(steps, "O SSR precisa do Node.js no servidor, na mesma versão major do workflow ("+o.NodeVersion+").")
 	}
 	f := o.Forge
 	if f.IsGitHub() {
