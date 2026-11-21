@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/vinicgobbi/deploy-tools/internal/validate"
@@ -26,7 +27,15 @@ type Conf struct {
 	Type     string // laravel | symfony | react | angular | static
 	Migrate  bool   // PHP apps: run the database migrations on deploy
 	Schedule bool   // Laravel: run schedule:run every minute (cron entry kept by deploy-tools)
+	SSR      bool   // Angular: server-side rendering, a Node service behind the Apache proxy
+	Port     int    // SSR: local port the Node server listens on (Apache proxies to it)
 }
+
+// Port range for SSR apps: unprivileged, below the ephemeral range.
+const (
+	MinPort = 1024
+	MaxPort = 32767
+)
 
 func Path(appDir string) string { return filepath.Join(appDir, FileName) }
 
@@ -66,6 +75,14 @@ func Read(appDir string) (c Conf, ok bool, err error) {
 			if c.Schedule, err = yesNo(key, val, n); err != nil {
 				return Conf{}, false, err
 			}
+		case "SSR":
+			if c.SSR, err = yesNo(key, val, n); err != nil {
+				return Conf{}, false, err
+			}
+		case "PORT":
+			if c.Port, err = strconv.Atoi(val); err != nil || c.Port < MinPort || c.Port > MaxPort {
+				return Conf{}, false, fmt.Errorf("%s:%d: PORT must be a number between %d and %d", FileName, n, MinPort, MaxPort)
+			}
 		default:
 			return Conf{}, false, fmt.Errorf("%s:%d: unknown key %q", FileName, n, key)
 		}
@@ -73,7 +90,24 @@ func Read(appDir string) (c Conf, ok bool, err error) {
 	if err := sc.Err(); err != nil {
 		return Conf{}, false, err
 	}
+	if err := c.checkSSR(); err != nil {
+		return Conf{}, false, fmt.Errorf("%s: %w", FileName, err)
+	}
 	return c, true, nil
+}
+
+// checkSSR: SSR only exists for Angular, and needs a port.
+func (c Conf) checkSSR() error {
+	if !c.SSR {
+		return nil
+	}
+	if c.Type != validate.Angular {
+		return fmt.Errorf("SSR=yes is only valid for TYPE=angular")
+	}
+	if c.Port < MinPort || c.Port > MaxPort {
+		return fmt.Errorf("SSR=yes needs PORT between %d and %d", MinPort, MaxPort)
+	}
+	return nil
 }
 
 func yesNo(key, val string, line int) (bool, error) {
@@ -87,10 +121,15 @@ func yesNo(key, val string, line int) (bool, error) {
 }
 
 // Write replaces the conf atomically (temp file + rename), mode 0644.
-// SCHEDULE is written only for Laravel, so the conf of other apps stays
-// readable by deploy-ci versions that predate the key.
+// SCHEDULE is written only for Laravel, and SSR/PORT only for Angular with
+// SSR on, so the conf of other apps stays readable by deploy-ci versions
+// that predate the keys (an SSR app, on the other hand, must be refused by
+// them: they would not restart its Node server).
 func Write(appDir string, c Conf) error {
 	if err := validate.Type(c.Type); err != nil {
+		return err
+	}
+	if err := c.checkSSR(); err != nil {
 		return err
 	}
 	migrate := "no"
@@ -102,6 +141,9 @@ func Write(appDir string, c Conf) error {
 		"MIGRATE=" + migrate + "\n"
 	if c.Type == validate.Laravel {
 		body += "SCHEDULE=" + map[bool]string{true: "yes", false: "no"}[c.Schedule] + "\n"
+	}
+	if c.SSR {
+		body += "SSR=yes\nPORT=" + strconv.Itoa(c.Port) + "\n"
 	}
 
 	tmp := Path(appDir) + ".tmp"
@@ -129,6 +171,8 @@ func DetectType(releaseDir string) string {
 		return validate.Laravel
 	case exists("bin/console") && exists("public/index.php"):
 		return validate.Symfony
+	case DetectSSR(releaseDir):
+		return validate.Angular
 	case exists("index.html") && globs("main*.js") && globs("polyfills*.js"):
 		return validate.Angular
 	case exists("index.html") && exists("assets"):
@@ -136,4 +180,15 @@ func DetectType(releaseDir string) string {
 	default:
 		return validate.Static
 	}
+}
+
+// SSRServer is the Node entry point of an Angular SSR build, relative to
+// the release (the tarball is dist/<project>, with browser/ and server/).
+const SSRServer = "server/server.mjs"
+
+// DetectSSR reports whether a release directory is an Angular SSR build.
+func DetectSSR(releaseDir string) bool {
+	_, err1 := os.Stat(filepath.Join(releaseDir, SSRServer))
+	fi, err2 := os.Stat(filepath.Join(releaseDir, "browser"))
+	return err1 == nil && err2 == nil && fi.IsDir()
 }
