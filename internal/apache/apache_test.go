@@ -48,6 +48,34 @@ func TestRenderGolden(t *testing.T) {
 	}
 }
 
+func TestRenderAngularSSRGolden(t *testing.T) {
+	for name, cert := range map[string]string{"vhost-angular-ssr.conf": "/c.crt", "vhost-angular-ssr-http.conf": ""} {
+		got, err := Render(VhostData{
+			App: "app", Type: "angular", Domains: []string{"app.example.com"},
+			DocRoot: "/var/www/app/current/browser", DirRoot: "/var/www/app",
+			CertFile: cert, CertKey: "/c.key", SSRPort: 4001,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got, "index.html") {
+			t.Errorf("%s: SSR não deveria ter o fallback de SPA", name)
+		}
+		golden(t, name, got)
+	}
+}
+
+func TestEnsureModules(t *testing.T) {
+	f := &run.Fake{Output: map[string]string{"apache2ctl -M": "Loaded Modules:\n rewrite_module (shared)\n proxy_http_module (shared)\n"}}
+	got, err := EnsureModules(f, "rewrite", "proxy", "proxy_http", "headers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "proxy,headers" {
+		t.Fatalf("enabled %v, calls %v", got, f.Strings())
+	}
+}
+
 const legacyVhost = `<VirtualHost *:443>
     ServerName api.example.com
     DocumentRoot "/var/www/api/public/"

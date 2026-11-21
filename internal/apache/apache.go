@@ -24,6 +24,7 @@ type VhostData struct {
 	CertFile  string   // "" = no certificate: HTTP only (port 80)
 	CertKey   string
 	CertChain string
+	SSRPort   int // Angular SSR: proxy what is not a file to the Node server on this port
 }
 
 // With a certificate, the HTTP vhost redirects each domain to itself over
@@ -47,6 +48,7 @@ var vhostTmpl = template.Must(template.New("vhost").Funcs(template.FuncMap{"join
 {{- end}}
 
     DocumentRoot {{.DocRoot}}
+{{- template "ssr" .}}
 
     SSLEngine on
     SSLCertificateFile {{.CertFile}}
@@ -66,6 +68,7 @@ var vhostTmpl = template.Must(template.New("vhost").Funcs(template.FuncMap{"join
 {{- end}}
 
     DocumentRoot {{.DocRoot}}
+{{- template "ssr" .}}
 
     ErrorLog ${APACHE_LOG_DIR}/{{.App}}-error.log
     CustomLog ${APACHE_LOG_DIR}/{{.App}}-access.log combined
@@ -85,7 +88,7 @@ var vhostTmpl = template.Must(template.New("vhost").Funcs(template.FuncMap{"join
     # Rotas do Symfony sem depender do .htaccess (symfony/apache-pack)
     FallbackResource /index.php
 {{- end}}
-{{- if or (eq .Type "react") (eq .Type "angular")}}
+{{- if and (or (eq .Type "react") (eq .Type "angular")) (not .SSRPort)}}
 
     RewriteEngine On
     RewriteBase /
@@ -97,6 +100,19 @@ var vhostTmpl = template.Must(template.New("vhost").Funcs(template.FuncMap{"join
     RewriteRule ^ index.html [L]
 {{- end}}
 </Directory>
+{{- define "ssr"}}
+{{- if .SSRPort}}
+
+    # Angular SSR: os arquivos do build (browser/) saem direto do Apache; o
+    # resto é renderizado pelo Node (deploy-tools-{{.App}}.service).
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto expr=%{REQUEST_SCHEME}
+    RewriteEngine On
+    RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI} !-f
+    RewriteRule ^/(.*)$ http://127.0.0.1:{{.SSRPort}}/$1 [P,L]
+    ProxyPassReverse / http://127.0.0.1:{{.SSRPort}}/
+{{- end}}
+{{- end}}
 `))
 
 func Render(d VhostData) (string, error) {
@@ -467,14 +483,41 @@ func Apply(r run.Runner, rollback func()) error {
 
 // EnsureRewrite enables mod_rewrite when missing; reports whether it did.
 func EnsureRewrite(r run.Runner) (bool, error) {
+	enabled, err := EnsureModules(r, "rewrite")
+	return len(enabled) > 0, err
+}
+
+// SSRModules are what the vhost of an Angular SSR app needs besides
+// mod_rewrite: the proxy to the Node server and the X-Forwarded-Proto
+// header.
+var SSRModules = []string{"proxy", "proxy_http", "headers"}
+
+// EnsureModules enables the modules (a2enmod names) that apache2ctl -M
+// does not list; it returns the ones it enabled.
+func EnsureModules(r run.Runner, mods ...string) ([]string, error) {
 	out, err := run.Output(r, run.Cmd{Name: "apache2ctl", Args: []string{"-M"}})
-	if err == nil && strings.Contains(out, "rewrite_module") {
-		return false, nil
+	var enabled []string
+	for _, m := range mods {
+		if err == nil && hasModule(out, m+"_module") {
+			continue
+		}
+		if _, err := run.Output(r, run.Cmd{Name: "a2enmod", Args: []string{m}}); err != nil {
+			return enabled, err
+		}
+		enabled = append(enabled, m)
 	}
-	if _, err := run.Output(r, run.Cmd{Name: "a2enmod", Args: []string{"rewrite"}}); err != nil {
-		return false, err
+	return enabled, nil
+}
+
+// hasModule looks for a whole module name in apache2ctl -M output
+// ("proxy_module" must not match "proxy_http_module").
+func hasModule(out, name string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) > 0 && f[0] == name {
+			return true
+		}
 	}
-	return true, nil
+	return false
 }
 
 // WriteFileAtomic writes via temp file + rename, keeping mode.

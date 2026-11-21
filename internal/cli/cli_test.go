@@ -955,3 +955,42 @@ func TestListAppsIsColoredAndAligned(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateAngularSSRAndStatus(t *testing.T) {
+	env, out := testEnv(t, "")
+	f := env.P.Runner.(*run.Fake)
+	f.Output["node -e"] = "/usr/bin/node"
+	f.Output["systemctl is-active"] = "failed\n"
+	if err := runCLI(env, "app", "create", "loja", "--type", "react", "--ssr"); err == nil {
+		t.Fatal("--ssr em react aceito")
+	}
+	if err := runCLI(env, "app", "create", "loja", "--type", "angular", "--port", "31999"); err == nil {
+		t.Fatal("--port sem --ssr aceito")
+	}
+	// An explicit high port, so the test does not depend on 4000 being free.
+	if err := runCLI(env, "app", "create", "loja", "--type", "angular", "--ssr", "--port", "31999"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, _ := appconf.Read(env.Paths.AppDir("loja")); !c.SSR || c.Port != 31999 {
+		t.Fatalf("conf %+v", c)
+	}
+	if !strings.Contains(out.String(), "deploy-tools-loja.service · porta 31999") {
+		t.Fatalf("saída:\n%s", out)
+	}
+	// After a deploy, a service that is not running shows up in status.
+	rel := filepath.Join(env.Paths.ReleasesDir("loja"), "20261120120000-abc1234")
+	_ = os.MkdirAll(rel, 0o755)
+	_ = os.Symlink(rel, env.Paths.CurrentLink("loja"))
+	out.Reset()
+	if err := runCLI(env, "app", "status", "loja"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"SSR na porta 31999 (failed)", "journalctl -u deploy-tools-loja.service"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status sem %q:\n%s", want, out)
+		}
+	}
+	if err := runCLI(env, "app", "config", "loja", "--type", "react"); err == nil {
+		t.Fatal("troca de tipo de app SSR aceita")
+	}
+}

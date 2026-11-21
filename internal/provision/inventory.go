@@ -1,6 +1,7 @@
 package provision
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/vinicgobbi/deploy-tools/internal/apache"
 	"github.com/vinicgobbi/deploy-tools/internal/appconf"
+	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/release"
 	"github.com/vinicgobbi/deploy-tools/internal/validate"
 )
@@ -25,6 +27,7 @@ type AppInfo struct {
 	Domains      []string // ServerName + ServerAlias
 	CertFile     string   // SSLCertificateFile of the vhost
 	Scheduled    bool     // the Laravel scheduler cron entry exists
+	SSR          SSRState // the Angular SSR service and sudoers rule
 }
 
 // Apps lists every directory under AppsRoot, managed or not.
@@ -66,6 +69,7 @@ func (p *Provisioner) App(name string) (AppInfo, error) {
 		info.Conf = &c
 	}
 	info.Scheduled = p.ScheduleInstalled(name)
+	info.SSR = p.SSRState(name)
 
 	if exists(p.Paths.VhostFile(name)) {
 		info.Vhost = p.Paths.VhostFile(name)
@@ -104,13 +108,25 @@ func (p *Provisioner) vhostEnabled(vhost string) bool {
 }
 
 // Configure writes .deploy.conf for an existing managed app and keeps the
-// Laravel scheduler cron entry in line with it.
+// Laravel scheduler cron entry and the Angular SSR service in line with it.
+// SSR is not switched here (the vhost would have to change too): an SSR
+// app keeps it, and its service is repaired.
 func (p *Provisioner) Configure(app string, c appconf.Conf) error {
 	if err := validate.AppName(app); err != nil {
 		return err
 	}
 	if err := p.Releases().ValidateApp(app); err != nil {
 		return err
+	}
+	if c.SSR && c.Type != validate.Angular {
+		return fmt.Errorf("%s usa Angular SSR (serviço %s); o tipo não pode ser trocado", app, config.ServiceName(app))
+	}
+	var node string
+	if c.SSR {
+		var err error
+		if node, err = p.NodePath(); err != nil {
+			return err
+		}
 	}
 	if !validate.IsPHP(c.Type) {
 		c.Migrate = false
@@ -125,7 +141,10 @@ func (p *Provisioner) Configure(app string, c appconf.Conf) error {
 	if err := p.repairLaravelStorage(app, c); err != nil {
 		return err
 	}
-	return p.syncSchedule(app, c)
+	if err := p.syncSchedule(app, c); err != nil {
+		return err
+	}
+	return p.syncSSR(app, c, node)
 }
 
 // repairLaravelStorage gives every level of shared/storage the shared

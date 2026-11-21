@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,6 +166,12 @@ func printAppCard(env *Env, info provision.AppInfo) {
 		if info.Conf.Type == validate.Laravel {
 			deploy += " · agendador: " + yesNo(info.Conf.Schedule)
 		}
+		if info.Conf.SSR {
+			deploy += " · SSR na porta " + strconv.Itoa(info.Conf.Port)
+			if info.SSR.Active != "" {
+				deploy += " (" + info.SSR.Active + ")"
+			}
+		}
 	}
 	pairs = append(pairs, [2]string{"tipo", deploy})
 	if info.Current != "" {
@@ -208,6 +215,18 @@ func printAppCard(env *Env, info provision.AppInfo) {
 		case !wantCron && info.Scheduled:
 			todo = append(todo, env.Paths.CronFile(info.Name)+" existe, mas o agendador está desligado no .deploy.conf. "+
 				"Remova com: sudo deploy-tools app config "+info.Name+" --no-schedule")
+		}
+	}
+	if c := info.Conf; c != nil {
+		svc := config.ServiceName(info.Name)
+		switch {
+		case c.SSR && (!info.SSR.Unit || !info.SSR.Sudoers):
+			todo = append(todo, "O SSR está ligado, mas falta o serviço ("+env.Paths.UnitFile(info.Name)+") ou a regra do sudo ("+
+				env.Paths.SudoersFile(info.Name)+"). Recrie com: sudo deploy-tools app config "+info.Name)
+		case c.SSR && info.Current != "" && info.SSR.Active != "" && info.SSR.Active != "active":
+			todo = append(todo, "O servidor do SSR está "+info.SSR.Active+". Veja o log: journalctl -u "+svc+" -n 50")
+		case !c.SSR && info.SSR.Unit:
+			todo = append(todo, env.Paths.UnitFile(info.Name)+" existe, mas o SSR está desligado no .deploy.conf.")
 		}
 	}
 	if len(todo) > 0 {

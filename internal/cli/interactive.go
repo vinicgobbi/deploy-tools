@@ -340,6 +340,12 @@ func iCreate(env *Env) error {
 			Description(scheduleDescription(env, o.App)).
 			Affirmative("Sim").Negative("Não").Value(&o.Schedule))
 	}
+	if o.Type == validate.Angular {
+		fields = append(fields, huh.NewConfirm().Title("O projeto usa SSR (server-side rendering)?").
+			Description("Sim: o build tem server/server.mjs, que roda como serviço do systemd ("+
+				config.ServiceName(o.App)+", como "+env.Paths.WebUser+") atrás do Apache. Precisa do Node.js no servidor.").
+			Affirmative("Sim").Negative("Não").Value(&o.SSR))
+	}
 	fields = append(fields, huh.NewConfirm().Title("Colocar o site no ar agora?").
 		Description("Ativa no Apache e recarrega. Escolha Não se o DNS ou o certificado ainda não estão prontos.").
 		Affirmative("Sim").Negative("Não").Value(&o.Enable))
@@ -366,6 +372,9 @@ func iCreate(env *Env) error {
 	}
 	if o.Type == validate.Laravel {
 		summary = append(summary, [2]string{"agendador", yesNo(o.Schedule)})
+	}
+	if o.Type == validate.Angular {
+		summary = append(summary, [2]string{"SSR", yesNo(o.SSR)})
 	}
 	env.UI.KV(summary...)
 	env.UI.Println()

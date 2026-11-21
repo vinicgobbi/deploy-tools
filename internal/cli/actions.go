@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
 
 	"github.com/vinicgobbi/deploy-tools/internal/appconf"
+	"github.com/vinicgobbi/deploy-tools/internal/config"
 	"github.com/vinicgobbi/deploy-tools/internal/provision"
 	"github.com/vinicgobbi/deploy-tools/internal/release"
 	"github.com/vinicgobbi/deploy-tools/internal/ui"
@@ -24,7 +26,7 @@ func typeOptions() []huh.Option[string] {
 		huh.NewOption("Laravel   PHP; .env e storage/ são mantidos entre deploys", validate.Laravel),
 		huh.NewOption("Symfony   PHP; .env.local e var/log são mantidos entre deploys", validate.Symfony),
 		huh.NewOption("React     SPA buildada com Vite (dist/)", validate.React),
-		huh.NewOption("Angular   SPA buildada com o Angular CLI (dist/<projeto>/browser)", validate.Angular),
+		huh.NewOption("Angular   buildado com o Angular CLI (SPA ou SSR)", validate.Angular),
 		huh.NewOption("Estático  site já pronto, ex.: mkdocs ou HTML", validate.Static),
 	}
 }
@@ -77,6 +79,14 @@ func doCreate(env *Env, o provision.CreateOptions) error {
 	}
 	if validate.IsPHP(o.Type) {
 		steps = append(steps, "Preencha "+filepath.Join(env.Paths.SharedDir(o.App), release.EnvFile(o.Type))+".")
+	}
+	if o.SSR {
+		if c, ok, _ := appconf.Read(appDir); ok {
+			env.UI.KV([2]string{"SSR", config.ServiceName(o.App) + " · porta " + strconv.Itoa(c.Port) + " (só local)"})
+		}
+		steps = append(steps,
+			"Se o servidor do SSR usa variáveis de ambiente, preencha "+filepath.Join(env.Paths.SharedDir(o.App), ".env")+".",
+			"Bloqueie a porta do SSR no firewall: o server.ts padrão do Angular escuta em todas as interfaces.")
 	}
 	if !o.Enable {
 		steps = append(steps, "Coloque no ar: sudo deploy-tools app enable "+o.App)
@@ -361,6 +371,9 @@ func doConfig(env *Env, app string, ch configChange) error {
 	if err := validate.Type(c.Type); err != nil {
 		return err
 	}
+	if existing.SSR && c.Type != validate.Angular {
+		return fmt.Errorf("%s usa Angular SSR; o tipo não pode ser trocado", app)
+	}
 	if ch.Schedule != nil && *ch.Schedule && c.Type != validate.Laravel {
 		return fmt.Errorf("o agendador (--schedule) só existe para apps Laravel; %s é %s", app, typeName(c.Type))
 	}
@@ -392,6 +405,10 @@ func doConfig(env *Env, app string, ch configChange) error {
 	case validate.Symfony:
 		env.UI.Println("Próximos deploys rodam cache:clear --env=prod" +
 			map[bool]string{true: " e doctrine:migrations:migrate.", false: "."}[c.Migrate])
+	case validate.Angular:
+		if c.SSR {
+			env.UI.Println("Próximos deploys reiniciam " + config.ServiceName(app) + " (Node na porta " + strconv.Itoa(c.Port) + ").")
+		}
 	}
 	return nil
 }

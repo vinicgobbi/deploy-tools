@@ -68,8 +68,15 @@ vários, o comando pergunta qual (ou use --base/--sub).
 O certificado é procurado no servidor (Let's Encrypt, /etc/ssl, /etc/pki/tls,
 pastas do Apache e SSL_SEARCH_DIRS de /etc/deploy-tools.conf): vale o que
 cobrir todos os domínios. Sem nenhum (num terminal, o comando oferece
-informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <app>".`,
+informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <app>".
+
+Angular com --ssr (server-side rendering): o servidor Node do build
+(server/server.mjs) roda como serviço do systemd (deploy-tools-<app>.service),
+como www-data, numa porta local (a partir da 4000, ou --port). O Apache
+serve os arquivos de browser/ e repassa o resto ao Node. O deploy reinicia o
+serviço a cada release. Precisa do Node.js instalado no servidor.`,
 		Example: `  sudo deploy-tools app create minha-api --type laravel
+  sudo deploy-tools app create loja --type angular --ssr
   sudo deploy-tools app create meu-front --type react --domain app.example.com --domain www.app.example.com --enable
   sudo deploy-tools app create docs --type static --base vinicgobbi.dev.br            # docs.vinicgobbi.dev.br
   sudo deploy-tools app create painel --type react --base vinicgobbi.dev.br --sub admin`,
@@ -106,6 +113,8 @@ informar um), o site fica só em HTTP até você rodar "deploy-tools app cert <a
 	certFlags(createCmd, &create.Cert)
 	createCmd.Flags().BoolVar(&create.MigrateOnDeploy, "migrate-on-deploy", false, "laravel/symfony: roda as migrations a cada deploy")
 	createCmd.Flags().BoolVar(&create.Schedule, "schedule", false, "laravel: roda o agendador (schedule:run) a cada minuto, pelo cron")
+	createCmd.Flags().BoolVar(&create.SSR, "ssr", false, "angular: server-side rendering (servidor Node atrás do Apache, pelo systemd)")
+	createCmd.Flags().IntVar(&create.Port, "port", 0, "com --ssr: porta local do servidor Node (padrão: a próxima livre a partir da 4000)")
 	createCmd.Flags().BoolVar(&create.Enable, "enable", false, "ativa o vhost e recarrega o Apache (com configtest)")
 	_ = createCmd.RegisterFlagCompletionFunc("type", completeTypes)
 

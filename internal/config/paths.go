@@ -42,6 +42,9 @@ type Paths struct {
 	DeployHome   string // /home/deploy
 	SSHDir       string // /etc/ssh (host keys for DEPLOY_HOST_KEY)
 	CronDir      string // /etc/cron.d (Laravel scheduler of each app)
+	SystemdDir   string // /etc/systemd/system (Node service of each Angular SSR app)
+	SudoersDir   string // /etc/sudoers.d (lets deploy restart that service)
+	Systemctl    string // absolute path, as written in the sudoers rule
 
 	// DeployHost is how the CI reaches this server (secret DEPLOY_HOST);
 	// "" = the machine's hostname.
@@ -83,6 +86,9 @@ func Default() Paths {
 		DeployHome:   "/home/deploy",
 		SSHDir:       "/etc/ssh",
 		CronDir:      "/etc/cron.d",
+		SystemdDir:   "/etc/systemd/system",
+		SudoersDir:   "/etc/sudoers.d",
+		Systemctl:    "/usr/bin/systemctl",
 		DeployUser:   "deploy",
 		WebUser:      "www-data",
 		WebGroup:     "www-data",
@@ -253,6 +259,8 @@ func ForRoot(root string) Paths {
 	p.DeployHome = filepath.Join(root, p.DeployHome)
 	p.SSHDir = filepath.Join(root, p.SSHDir)
 	p.CronDir = filepath.Join(root, p.CronDir)
+	p.SystemdDir = filepath.Join(root, p.SystemdDir)
+	p.SudoersDir = filepath.Join(root, p.SudoersDir)
 	p.ConfigFile = filepath.Join(root, File)
 	p.CertDirs = nil
 	for _, d := range tlscert.DefaultDirs {
@@ -270,6 +278,19 @@ func (p Paths) VhostFile(app string) string   { return filepath.Join(p.SitesAvai
 // CronFile is the app's Laravel scheduler entry. cron ignores files in
 // /etc/cron.d whose names have a dot; app names never do.
 func (p Paths) CronFile(app string) string { return filepath.Join(p.CronDir, "deploy-tools-"+app) }
-func (p Paths) AuthorizedKeys() string     { return filepath.Join(p.DeployHome, ".ssh", "authorized_keys") }
-func (p Paths) BinaryPath() string         { return filepath.Join(p.BinDir, "deploy-tools") }
-func (p Paths) WrapperPath() string        { return filepath.Join(p.BinDir, "deploy-ci") }
+
+// ServiceName is the systemd unit running the Node server of an Angular
+// SSR app.
+func ServiceName(app string) string { return "deploy-tools-" + app + ".service" }
+
+func (p Paths) UnitFile(app string) string { return filepath.Join(p.SystemdDir, ServiceName(app)) }
+
+// SudoersFile lets the deploy user restart the app's SSR service. sudo
+// skips files in sudoers.d whose names have a dot; app names never do.
+func (p Paths) SudoersFile(app string) string {
+	return filepath.Join(p.SudoersDir, "deploy-tools-"+app)
+}
+
+func (p Paths) AuthorizedKeys() string { return filepath.Join(p.DeployHome, ".ssh", "authorized_keys") }
+func (p Paths) BinaryPath() string     { return filepath.Join(p.BinDir, "deploy-tools") }
+func (p Paths) WrapperPath() string    { return filepath.Join(p.BinDir, "deploy-ci") }

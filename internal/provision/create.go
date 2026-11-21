@@ -1,6 +1,7 @@
 package provision
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,8 @@ type CreateOptions struct {
 	Cert            CertChoice // optional explicit certificate (File+Key[+Chain]); found automatically otherwise
 	MigrateOnDeploy bool       // laravel and symfony
 	Schedule        bool       // laravel only: cron entry running schedule:run every minute
+	SSR             bool       // angular only: server-side rendering (Node service behind the proxy)
+	Port            int        // SSR: port of the Node server; 0 = the next free from FirstSSRPort
 	Enable          bool       // a2ensite + configtest + reload
 }
 
@@ -73,6 +76,12 @@ func (p *Provisioner) CheckCreate(o CreateOptions) error {
 	if err := validateDomains(o.Domains); err != nil {
 		return err
 	}
+	if o.SSR && o.Type != validate.Angular {
+		return fmt.Errorf("SSR (--ssr) só existe para apps Angular; o tipo escolhido é %s", o.Type)
+	}
+	if !o.SSR && o.Port != 0 {
+		return errors.New("--port só vale com --ssr")
+	}
 	if exists(p.Paths.AppDir(o.App)) {
 		return fmt.Errorf("já existe: %s (se é um app em produção fora do padrão, use `deploy-tools app migrate %s`)", p.Paths.AppDir(o.App), o.App)
 	}
@@ -92,6 +101,21 @@ func (p *Provisioner) Create(o CreateOptions) error {
 	if o.Enable {
 		if err := apache.ConfigTest(p.Runner); err != nil {
 			return fmt.Errorf("%w: %w", apache.ErrConfigAlreadyBroken, err)
+		}
+	}
+	// The SSR prerequisites are checked before anything is created.
+	var node string
+	if o.SSR {
+		var err error
+		if node, err = p.NodePath(); err != nil {
+			return err
+		}
+		if o.Port == 0 {
+			if o.Port, err = p.NextSSRPort(); err != nil {
+				return err
+			}
+		} else if err := p.CheckSSRPort(o.App, o.Port); err != nil {
+			return err
 		}
 	}
 	appDir := p.Paths.AppDir(o.App)
@@ -130,10 +154,25 @@ func (p *Provisioner) Create(o CreateOptions) error {
 		dirRoot = docRoot
 	}
 
+	if o.SSR {
+		// Server-side environment of the Node server (the service loads it).
+		// Outside browser/, so Apache never serves it.
+		sh := p.Paths.SharedDir(o.App)
+		if err := p.emptyEnv(filepath.Join(sh, ".env")); err != nil {
+			return err
+		}
+		p.say("Criado %s vazio — variáveis de ambiente do servidor do SSR, se o app usar.", filepath.Join(sh, ".env"))
+		docRoot = filepath.Join(docRoot, "browser")
+	}
+
 	conf := appconf.Conf{
 		Type:     o.Type,
 		Migrate:  o.MigrateOnDeploy && validate.IsPHP(o.Type),
 		Schedule: o.Schedule && o.Type == validate.Laravel,
+		SSR:      o.SSR,
+	}
+	if o.SSR {
+		conf.Port = o.Port
 	}
 	if err := appconf.Write(appDir, conf); err != nil {
 		return err
@@ -141,11 +180,18 @@ func (p *Provisioner) Create(o CreateOptions) error {
 	if err := p.syncSchedule(o.App, conf); err != nil {
 		return err
 	}
+	if err := p.syncSSR(o.App, conf, node); err != nil {
+		return err
+	}
 
-	if enabled, err := apache.EnsureRewrite(p.Runner); err != nil {
-		return fmt.Errorf("ativando mod_rewrite: %w", err)
-	} else if enabled {
-		p.say("mod_rewrite ativado.")
+	mods := []string{"rewrite"}
+	if o.SSR {
+		mods = append(mods, apache.SSRModules...)
+	}
+	if enabled, err := apache.EnsureModules(p.Runner, mods...); err != nil {
+		return fmt.Errorf("ativando módulos do Apache: %w", err)
+	} else if len(enabled) > 0 {
+		p.say("Módulos do Apache ativados: %s", strings.Join(enabled, ", "))
 	}
 
 	cert, err := p.ChooseCert(o.Domains, o.Cert)
@@ -154,7 +200,7 @@ func (p *Provisioner) Create(o CreateOptions) error {
 	}
 	vhost, err := apache.Render(apache.VhostData{
 		App: o.App, Type: o.Type, Domains: o.Domains, DocRoot: docRoot, DirRoot: dirRoot,
-		CertFile: cert.File, CertKey: cert.Key, CertChain: cert.Chain,
+		CertFile: cert.File, CertKey: cert.Key, CertChain: cert.Chain, SSRPort: conf.Port,
 	})
 	if err != nil {
 		return err
