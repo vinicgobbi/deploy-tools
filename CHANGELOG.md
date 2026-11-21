@@ -1,3 +1,12 @@
+## v0.17.0 (2026-11-21)
+
+### Feat
+
+- **init**: detecta Angular SSR no angular.json
+- **release**: reinicia o Node do SSR no deploy e no rollback
+- **app**: serviço systemd e proxy do Apache para Angular SSR
+- **appconf**: adiciona SSR e porta ao .deploy.conf
+
 ## v0.16.1 (2026-10-26)
 
 ### Fix
